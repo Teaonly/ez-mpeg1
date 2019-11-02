@@ -4,6 +4,9 @@ pub struct BitBuffer<'a> {
 }
 
 impl<'a> BitBuffer<'a> {
+    pub fn len(&self) -> usize {
+        self._buf.len()
+    }
     pub fn new(buf: &'a[u8]) -> Self {
         BitBuffer::<'a> {
             _buf: buf,

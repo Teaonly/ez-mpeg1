@@ -6,7 +6,7 @@ use crate::bitbuf;
 #[allow(non_camel_case_types)]
 #[derive(Debug)]
 pub enum PacketError {
-    OUT_LENGTH,
+    OUT_LENGTH(usize),
     NO_START_CODE,
     CODE_NOT_MATCH,
     FORMAT_ERROR,
@@ -19,6 +19,7 @@ pub enum PacketType {
     PS_SYSTEM_HEADER,
     PES_AUDIO,
     PES_VIDEO,
+    PES_UNKNOW,
 }
 
 pub struct MpegPS {
@@ -37,17 +38,37 @@ pub struct PESPacketInfo {
     pub code: u32,
     pub offset: usize,
     pub len: usize,
-    pub pts: i64,
+    pub pts: u64,
+}
+
+impl PESPacketInfo {
+    pub fn pos(&self) ->usize{
+        self.offset + self.len
+    }
 }
 
 impl MpegPS {
     const PACK_HEADER_CODE: u32 = 0x000001BA;
     const SYSTEM_HEADER_CODE: u32 = 0x000001BB;
     const PES_VIDEO_BEGIN: u32 = 0x000001E0;
-    const PES_VIDEO_END: u32 = 0x000001EF;_
+    const PES_VIDEO_END: u32 = 0x000001EF;
     const PES_AUDIO_BEGIN: u32 = 0x000001C0;
     const PES_AUDIO_END: u32 = 0x000001DF;
     const PES_PRIVATE_CODE: u32 = 0x000001BD;
+
+    fn code2type(code:u32) -> PacketType {
+        if code >= MpegPS::PES_AUDIO_BEGIN &&
+           code <= MpegPS::PES_AUDIO_END {
+            return PacketType::PES_AUDIO;
+        }
+
+        if code >= MpegPS::PES_VIDEO_BEGIN &&
+           code <= MpegPS::PES_VIDEO_END {
+            return PacketType::PES_VIDEO;
+        }
+
+        return PacketType::PES_UNKNOW;
+    }
 
     pub fn new() -> MpegPS {
         MpegPS {
@@ -78,47 +99,84 @@ impl MpegPS {
         }
 
         if let Some(pos) = MpegPS::find_start_code_of_av(data) {
-            return self.get_pes_packet(data);
+            return self.get_pes_packet(data, pos);
         }
 
         return Err(PacketError::NO_START_CODE);
     }
 
     fn get_pes_packet(&mut self, data: &[u8], pos:usize) -> Result<PESPacketInfo, PacketError> {
-        if data.len() < 6 {
-            return Err(PacketError::OUT_LENGTH);
-        }
-
         let mut buffer = bitbuf::BitBuffer::new( &data[pos..] );
+        if buffer.len() < 6 {
+            return Err(PacketError::OUT_LENGTH(0));
+        }
 
         // check code
         let code:u32 = buffer.read(32).unwrap();
 
         // get length
         let mut pes_length = buffer.read(16).unwrap() as usize;
-        if data.len() < 6 + pes_length {
-            return Err(PacketError::OUT_LENGTH);
+        if buffer.len() < 6 + pes_length {
+            return Err(PacketError::OUT_LENGTH(6 + pes_length - buffer.len()));
         }
 
         if pes_length == 0 {
             if let Some(pos) = MpegPS::find_start_code_of_av( &data[6..] ) {
                 pes_length = pos;
             } else {
-                return Err(PacketError::OUT_LENGTH);
+                return Err(PacketError::OUT_LENGTH(0));
             }
         }
 
-        if buffer.read(4).unwrap() == 0x00 {
-
+        if buffer.read(2).unwrap() == 0x01 {
+            pes_length = pes_length - 2;
+            buffer.skip(16);
         }
+
+        // 11 = both present, 01 is forbidden, 10 = only PTS, 00 = no PTS or DTS
+        let indicator = buffer.read(2).unwrap();
+        if indicator == 0x00 {
+            buffer.skip(4);
+            return Ok(PESPacketInfo {
+                pkt_type:   PacketType::PES_UNKNOW,
+                code: code,
+                offset: pos,
+                len: buffer.pos() >> 3,
+                pts: 0
+            });
+        } else if indicator == 0x01 {
+            return Err(PacketError::FORMAT_ERROR);
+        }
+
+        let mut ts:u64 = 0;
+        ts = ts | (buffer.read(3).unwrap() as u64) << 30;
+        buffer.skip(1);
+        ts = ts | (buffer.read(15).unwrap() as u64) << 15;
+        buffer.skip(1);
+        ts = ts | (buffer.read(15).unwrap() as u64);
+        buffer.skip(1);
+        pes_length = pes_length - 5;
+
+        if indicator == 0x03 {
+            // skip dts
+            buffer.skip(40);
+            pes_length = pes_length -5;
+        }
+
+        return Ok(PESPacketInfo {
+            pkt_type:   MpegPS::code2type(code),
+            code: code,
+            offset: pos + (buffer.pos()>>3),
+            len: pes_length,
+            pts: ts
+        });
     }
 
     fn get_system_header_packet(&mut self, data: &[u8], pos:usize) -> Result<PESPacketInfo, PacketError> {
-        if data.len() < 6 {
-            return Err(PacketError::OUT_LENGTH);
-        }
-
         let mut buffer = bitbuf::BitBuffer::new( &data[pos..] );
+        if buffer.len() < 6 {
+            return Err(PacketError::OUT_LENGTH(0));
+        }
 
         // check code
         let code:u32 = buffer.read(32).unwrap();
@@ -128,8 +186,8 @@ impl MpegPS {
 
         // get length
         let pes_length = buffer.read(16).unwrap() as usize;
-        if data.len() < 6 + pes_length {
-            return Err(PacketError::OUT_LENGTH);
+        if buffer.len() < 6 + pes_length {
+            return Err(PacketError::OUT_LENGTH(6 + pes_length - buffer.len()));
         }
         // get audio&video number
         buffer.skip(24);    //rate bound and marker bits
@@ -153,11 +211,10 @@ impl MpegPS {
     }
 
     fn get_pack_header_packet(&mut self, data: &[u8], pos:usize) -> Result<PESPacketInfo, PacketError> {
-        if data.len() < 12 {
-            return Err(PacketError::OUT_LENGTH);
-        }
-
         let mut buffer = bitbuf::BitBuffer::new( &data[pos..] );
+        if buffer.len() < 12 {
+            return Err(PacketError::OUT_LENGTH(12 - buffer.len()));
+        }
 
         // check code
         let code:u32 = buffer.read(32).unwrap();
@@ -183,8 +240,7 @@ impl MpegPS {
 
         // skip bitrate and stuff
         buffer.skip(1);
-        let mut bit_rate:u64 = 0;
-        bit_rate = buffer.read(22).unwrap() as u64;
+        let bit_rate = buffer.read(22).unwrap() as u64;
         buffer.skip(1);
         self.bit_rate = bit_rate;
 
@@ -208,7 +264,7 @@ impl MpegPS {
             if data[pos] == 0x00
                && data[pos+1] == 0x00
                && data[pos+2] == 0x01 {
-                let flag:u32 = 0x00000100 | data[pos+3];
+                let flag:u32 = 0x00000100 | data[pos+3] as u32;
                 if (flag >= MpegPS::PES_VIDEO_BEGIN &&
                     flag <= MpegPS::PES_VIDEO_END) ||
                    (flag >= MpegPS::PES_AUDIO_BEGIN &&

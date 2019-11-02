@@ -20,18 +20,24 @@ impl ByteBuffer {
         self._buf.len()
     }
 
+    pub fn remain(&self) -> usize {
+        self._buf.len() - self._len
+    }
+
     pub fn get<'a>(&'a self, offset: usize) ->&'a [u8]{
         &self._buf[offset..self._len]
     }
 
-    pub unsafe fn rewind(&mut self, offset: usize) {
+    pub fn rewind(&mut self, offset: usize) {
         if offset >= self._len {
             return;
         }
 
-        let dst: *mut u8 = self._buf.as_ptr() as *mut u8;
-        let src: *const u8 = self._buf.as_ptr().add(offset);
-        ptr::copy(src, dst, self._len - offset);
+        unsafe {
+            let dst: *mut u8 = self._buf.as_ptr() as *mut u8;
+            let src: *const u8 = self._buf.as_ptr().add(offset);
+            ptr::copy(src, dst, self._len - offset);
+        }
         self._len = self._len - offset;
     }
 
