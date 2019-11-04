@@ -3,7 +3,6 @@ use std::fs::File;
 use std::io::Read;
 
 mod bitbuf;
-mod bytebuf;
 mod pkt;
 
 fn main() {
@@ -23,7 +22,13 @@ fn main() {
             println!("===={:?}", pkt);
         }
         if let Err(e) = pkt_result {
-            if let pkt::PacketError::OUT_LENGTH(more) = e {
+            if let pkt::PacketError::OUT_LENGTH(_more) = e {
+                let mut pushed = 1280;
+                if pushed > data.len() - index {
+                    pushed = data.len() - index;
+                }
+                index = index + ps.push(&data[index..(index+pushed)]);
+            } else if let pkt::PacketError::NO_START_CODE = e {
                 let mut pushed = 1280;
                 if pushed > data.len() - index {
                     pushed = data.len() - index;

@@ -45,12 +45,7 @@ pub struct PESPacketInfo {
 
     pub offset: usize,
     pub len: usize,
-}
-
-impl PESPacketInfo {
-    pub fn pos(&self) ->usize{
-        self.offset + self.len
-    }
+    pub payload: isize,
 }
 
 impl MpegPS {
@@ -80,6 +75,16 @@ impl MpegPS {
         return &self.buffer_[self.offset_ + pos .. self.len_];
     }
 
+    fn rewind(&mut self) {
+        unsafe {
+            let dst: *mut u8 = self.buffer_.as_ptr() as *mut u8;
+            let src: *const u8 = self.buffer_.as_ptr().add(self.offset_);
+            ptr::copy(src, dst, self.len_ - self.offset_);
+        }
+        self.len_ = self.len_ - self.offset_;
+        self.offset_ = 0;
+    }
+
     pub fn new() -> MpegPS {
         let mut buffer:Vec<u8> = Vec::new();
         buffer.resize(1024*1024*4, 0);
@@ -98,11 +103,9 @@ impl MpegPS {
     }
 
     pub fn push(&mut self, data: &[u8]) -> usize {
-        let len = data.len();
-
         let mut copy_len = self.buffer_.len() - self.len_;
         if copy_len > data.len() {
-            copy_len = len;
+            copy_len = data.len();
         }
         unsafe {
             let dst: *mut u8 = self.buffer_.as_ptr().add(self.len_) as *mut u8;
@@ -117,21 +120,18 @@ impl MpegPS {
     pub fn get(&mut self) -> Result<PESPacketInfo, PacketError> {
         let pkt_result = self.get_packet();
         if let Ok(ref pkt) = pkt_result {
-            self.offset_ = self.offset_ + pkt.pos();
+            self.offset_ = self.offset_ + pkt.len + pkt.offset;
         }
         if let Err(ref e) = pkt_result {
             if let PacketError::OUT_LENGTH(more) = e {
                 let push_size = more + 1280;
                 let remain = self.buffer_.len() - self.len_;
                 if push_size > remain {
-                    unsafe {
-                        let dst: *mut u8 = self.buffer_.as_ptr() as *mut u8;
-                        let src: *const u8 = self.buffer_.as_ptr().add(self.offset_);
-                        ptr::copy(src, dst, self.len_ - self.offset_);
-                    }
-                    self.len_ = self.len_ - self.offset_;
-                    self.offset_ = 0;
+                    self.rewind();
                 }
+            }
+            if let PacketError::NO_START_CODE = e {
+                self.rewind();
             }
         }
         pkt_result
@@ -178,6 +178,7 @@ impl MpegPS {
             return Err(PacketError::OUT_LENGTH(6 + pes_length - buffer.len()));
         }
 
+        let mut payload = 6;
         if pes_length == 0 {
             if let Some(pos) = MpegPS::find_start_code_of_av( &data[6..] ) {
                 pes_length = pos;
@@ -187,21 +188,22 @@ impl MpegPS {
         }
 
         if buffer.read(2).unwrap() == 0x01 {
-            pes_length = pes_length - 2;
             buffer.skip(16);
+            payload += 2;
         }
 
         // 11 = both present, 01 is forbidden, 10 = only PTS, 00 = no PTS or DTS
         let indicator = buffer.read(2).unwrap();
         if indicator == 0x00 {
             buffer.skip(4);
-            pes_length = pes_length - 1;
+            payload += 1;
             return Ok(PESPacketInfo {
                 pkt_type:   MpegPS::code2type(code),
                 code: code,
-                offset: begin + buffer.pos() >> 3,
-                len: pes_length,
-                pts: 0
+                offset: begin ,
+                len: pes_length + 6,
+                pts: 0,
+                payload: payload,
             });
         } else if indicator == 0x01 {
             return Err(PacketError::FORMAT_ERROR);
@@ -214,20 +216,21 @@ impl MpegPS {
         buffer.skip(1);
         ts = ts | (buffer.read(15).unwrap() as u64);
         buffer.skip(1);
-        pes_length = pes_length - 5;
+        payload += 5;
 
         if indicator == 0x03 {
             // skip dts
             buffer.skip(40);
-            pes_length = pes_length -5;
+            payload += 5;
         }
 
         return Ok(PESPacketInfo {
             pkt_type:   MpegPS::code2type(code),
             code: code,
-            offset: begin + (buffer.pos()>>3),
-            len: pes_length,
-            pts: ts
+            offset: begin,
+            len: pes_length + 6,
+            pts: ts,
+            payload: payload,
         });
     }
 
@@ -250,11 +253,12 @@ impl MpegPS {
         if buffer.len() < 6 + pes_length {
             return Err(PacketError::OUT_LENGTH(6 + pes_length - buffer.len()));
         }
+
         // get audio&video number
         buffer.skip(24);    //rate bound and marker bits
-        //self.num_audio_streams = buffer.read(6).unwrap() as i32;
+        let num_audio_streams = buffer.read(6).unwrap() as i32;
         buffer.skip(5);
-        //self.num_video_streams = buffer.read(5).unwrap() as i32;
+        let num_video_streams = buffer.read(5).unwrap() as i32;
 
         // skip to end of packet
         buffer.skip( (pes_length - 5) * 8);
@@ -264,9 +268,12 @@ impl MpegPS {
             code: code,
             offset: begin,
             len: buffer.pos() >> 3,
-            pts: 0
+            pts: 0,
+            payload: 0,
         };
 
+        self.num_audio_streams = num_audio_streams;
+        self.num_video_streams = num_video_streams;
         self.has_system_header = true;
         Ok(pkt)
     }
@@ -299,22 +306,23 @@ impl MpegPS {
         buffer.skip(1);
         clock = clock | (buffer.read(15).unwrap() as u64);
         buffer.skip(1);
-        //self.system_clock_ref = clock;
 
         // skip bitrate and stuff
         buffer.skip(1);
         let bit_rate = buffer.read(22).unwrap() as u64;
         buffer.skip(1);
-        //self.bit_rate = bit_rate;
 
         let pkt = PESPacketInfo {
             pkt_type: PacketType::PS_PACK_HEADER,
             code: code,
             offset: begin,
-            len: buffer.pos() / 8,
-            pts: 0
+            len: buffer.pos() >> 3,
+            pts: 0,
+            payload: 0,
         };
 
+        self.system_clock_ref = clock;
+        self.bit_rate = bit_rate;
         self.has_pack_header = true;
         Ok(pkt)
     }
