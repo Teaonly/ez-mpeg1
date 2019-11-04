@@ -29,7 +29,6 @@ impl<'a> BitBuffer<'a> {
         }
         0
     }
-
     pub fn read(&mut self, mut count: usize) -> Option<u32> {
         if !self.has(count) {
             return None;

@@ -20,6 +20,7 @@ pub enum PacketType {
     PS_SYSTEM_HEADER,
     PES_AUDIO,
     PES_VIDEO,
+    PES_SKIP,
     PES_UNKNOW,
 }
 
@@ -56,6 +57,7 @@ impl MpegPS {
     const PES_AUDIO_BEGIN: u8 = 0xC0;
     const PES_AUDIO_END: u8 = 0xDF;
     const PES_PRIVATE_CODE: u8 = 0xBD;
+    const PES_PADDING_CODE: u8 = 0xBE;
 
     fn code2type(code:u8) -> PacketType {
         if code >= MpegPS::PES_AUDIO_BEGIN &&
@@ -68,6 +70,10 @@ impl MpegPS {
             return PacketType::PES_VIDEO;
         }
 
+        if code == MpegPS::PES_PADDING_CODE ||
+           code == MpegPS::PES_PRIVATE_CODE {
+            return PacketType::PES_SKIP;
+        }
         return PacketType::PES_UNKNOW;
     }
 
@@ -151,10 +157,9 @@ impl MpegPS {
             return self.get_pack_header_packet(pos);
         } else if code == MpegPS::SYSTEM_HEADER_CODE {
             return self.get_system_header_packet(pos);
-        } else {
-            if MpegPS::code2type(code) != PacketType::PES_UNKNOW {
-                return self.get_pes_packet(pos)
-            }
+        }
+        if MpegPS::code2type(code) != PacketType::PES_UNKNOW {
+            return self.get_pes_packet(pos);
         }
 
         return Err(PacketError::FORMAT_ERROR);
@@ -175,6 +180,16 @@ impl MpegPS {
         let mut pes_length = buffer.read(16).unwrap() as usize;
         if buffer.len() < 6 + pes_length {
             return Err(PacketError::OUT_LENGTH(6 + pes_length - buffer.len()));
+        }
+        if MpegPS::code2type(code) == PacketType::PES_SKIP {
+            return Ok(PESPacketInfo {
+                pkt_type:   PacketType::PES_SKIP,
+                code: code,
+                offset: begin,
+                len: pes_length + 6,
+                pts: 0,
+                payload: 0,
+            });
         }
 
         let mut payload = 6;
