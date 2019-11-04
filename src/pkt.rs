@@ -14,7 +14,7 @@ pub enum PacketError {
 }
 
 #[allow(non_camel_case_types)]
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum PacketType {
     PS_PACK_HEADER,
     PS_SYSTEM_HEADER,
@@ -40,7 +40,7 @@ pub struct MpegPS {
 #[derive(Debug)]
 pub struct PESPacketInfo {
     pub pkt_type: PacketType,
-    pub code: u32,
+    pub code: u8,
     pub pts: u64,
 
     pub offset: usize,
@@ -49,15 +49,15 @@ pub struct PESPacketInfo {
 }
 
 impl MpegPS {
-    const PACK_HEADER_CODE: u32 = 0x000001BA;
-    const SYSTEM_HEADER_CODE: u32 = 0x000001BB;
-    const PES_VIDEO_BEGIN: u32 = 0x000001E0;
-    const PES_VIDEO_END: u32 = 0x000001EF;
-    const PES_AUDIO_BEGIN: u32 = 0x000001C0;
-    const PES_AUDIO_END: u32 = 0x000001DF;
-    const PES_PRIVATE_CODE: u32 = 0x000001BD;
+    const PACK_HEADER_CODE: u8 = 0xBA;
+    const SYSTEM_HEADER_CODE: u8 = 0xBB;
+    const PES_VIDEO_BEGIN: u8 = 0xE0;
+    const PES_VIDEO_END: u8 = 0xEF;
+    const PES_AUDIO_BEGIN: u8 = 0xC0;
+    const PES_AUDIO_END: u8 = 0xDF;
+    const PES_PRIVATE_CODE: u8 = 0xBD;
 
-    fn code2type(code:u32) -> PacketType {
+    fn code2type(code:u8) -> PacketType {
         if code >= MpegPS::PES_AUDIO_BEGIN &&
            code <= MpegPS::PES_AUDIO_END {
             return PacketType::PES_AUDIO;
@@ -138,27 +138,26 @@ impl MpegPS {
     }
 
     fn get_packet(&mut self) -> Result<PESPacketInfo, PacketError> {
-        if !self.has_pack_header {
-            if let Some(pos) = MpegPS::find_start_code(self.data(0), MpegPS::PACK_HEADER_CODE) {
-                return self.get_pack_header_packet(pos);
-            } else {
-                return Err(PacketError::NO_START_CODE);
+        let code:u8;
+        let pos:usize;
+        if let Some((_pos, _code) ) = MpegPS::find_start_code(self.data(0)) {
+            pos = _pos;
+            code = _code;
+        } else {
+            return Err(PacketError::NO_START_CODE);
+        }
+
+        if code == MpegPS::PACK_HEADER_CODE {
+            return self.get_pack_header_packet(pos);
+        } else if code == MpegPS::SYSTEM_HEADER_CODE {
+            return self.get_system_header_packet(pos);
+        } else {
+            if MpegPS::code2type(code) != PacketType::PES_UNKNOW {
+                return self.get_pes_packet(pos)
             }
         }
 
-        if !self.has_system_header {
-            if let Some(pos) = MpegPS::find_start_code(self.data(0), MpegPS::SYSTEM_HEADER_CODE) {
-                return self.get_system_header_packet(pos);
-            } else {
-                return Err(PacketError::NO_START_CODE);
-            }
-        }
-
-        if let Some(pos) = MpegPS::find_start_code_of_av(self.data(0)) {
-            return self.get_pes_packet(pos);
-        }
-
-        return Err(PacketError::NO_START_CODE);
+        return Err(PacketError::FORMAT_ERROR);
     }
 
     fn get_pes_packet(&mut self, begin:usize) -> Result<PESPacketInfo, PacketError> {
@@ -170,7 +169,7 @@ impl MpegPS {
         }
 
         // check code
-        let code:u32 = buffer.read(32).unwrap();
+        let code:u8 = (buffer.read(32).unwrap() & 0xFF) as u8;
 
         // get length
         let mut pes_length = buffer.read(16).unwrap() as usize;
@@ -180,7 +179,7 @@ impl MpegPS {
 
         let mut payload = 6;
         if pes_length == 0 {
-            if let Some(pos) = MpegPS::find_start_code_of_av( &data[6..] ) {
+            if let Some((pos, _)) = MpegPS::find_start_code( &data[6..] ) {
                 pes_length = pos;
             } else {
                 return Err(PacketError::OUT_LENGTH(0));
@@ -243,7 +242,7 @@ impl MpegPS {
         }
 
         // check code
-        let code:u32 = buffer.read(32).unwrap();
+        let code:u8 = (buffer.read(32).unwrap() & 0xFF) as u8;
         if code != MpegPS::SYSTEM_HEADER_CODE {
             return Err(PacketError::CODE_NOT_MATCH);
         }
@@ -287,7 +286,7 @@ impl MpegPS {
         }
 
         // check code
-        let code:u32 = buffer.read(32).unwrap();
+        let code:u8 = (buffer.read(32).unwrap() & 0xFF) as u8;
         if code != MpegPS::PACK_HEADER_CODE {
             return Err(PacketError::CODE_NOT_MATCH);
         }
@@ -327,41 +326,16 @@ impl MpegPS {
         Ok(pkt)
     }
 
-    fn find_start_code_of_av(data:&[u8]) -> Option<usize> {
-        if data.len() < 4 {
+    fn find_start_code(data:&[u8]) -> Option<(usize, u8)> {
+        if data.len() < 3 {
             return None
         }
+
         for pos in 0..data.len() - 3 {
             if data[pos] == 0x00
                && data[pos+1] == 0x00
-               && data[pos+2] == 0x01 {
-                let flag:u32 = 0x00000100 | data[pos+3] as u32;
-                if (flag >= MpegPS::PES_VIDEO_BEGIN &&
-                    flag <= MpegPS::PES_VIDEO_END) ||
-                   (flag >= MpegPS::PES_AUDIO_BEGIN &&
-                    flag <= MpegPS::PES_AUDIO_END) {
-                    return Some(pos);
-                }
-            }
-        }
-        None
-    }
-
-    fn find_start_code(data:&[u8], code:u32) -> Option<usize> {
-        if data.len() < 4 {
-            return None
-        }
-        let c0 = (code >> 24) as u8;
-        let c1 = (code >> 16) as u8;
-        let c2 = (code >> 8) as u8;
-        let c3 = code as u8;
-
-        for pos in 0..data.len() - 3 {
-            if data[pos] == c0
-               && data[pos+1] == c1
-               && data[pos+2] == c2
-               && data[pos+3] == c3 {
-                return Some(pos);
+               && data[pos+2] == 0x01{
+                return Some( (pos, data[pos+3]));
             }
         }
         None
