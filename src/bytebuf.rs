@@ -41,11 +41,11 @@ impl ByteBuffer {
         self._len = self._len - offset;
     }
 
-    pub fn push(&mut self, data: &[u8]) {
-        let mut len = data.len();
+    pub fn push(&mut self, data: &[u8]) -> usize {
+        let len = data.len();
 
         let mut copy_len = self._buf.len() - self._len;
-        if copy_len > len {
+        if copy_len > data.len() {
             copy_len = len;
         }
         unsafe {
@@ -55,10 +55,13 @@ impl ByteBuffer {
         }
         self._len = self._len + copy_len;
 
+        /*
         len = len - copy_len;
         if len > 0 {
             self._buf.extend_from_slice(&data[copy_len..]);
             self._len = self._buf.len()
         }
+        */
+        return copy_len;
     }
 }

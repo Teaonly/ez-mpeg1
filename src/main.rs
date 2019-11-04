@@ -13,25 +13,9 @@ fn main() {
     let mut data:Vec<u8> = Vec::new();
     let _result = file.read_to_end(&mut data);
 
-    let mut buffer = bytebuf::ByteBuffer::new(1024*1024*4);
     let mut ps = pkt::MpegPS::new();
-
     /*
-    buffer.push(&data[0..1024]);
-    let mut offset:usize = 0;
-
-    let pack_pkt = ps.get_packet(buffer.get(0)).unwrap();
-    offset = offset + pack_pkt.pos();
-    let system_pkt = ps.get_packet(buffer.get(offset )).unwrap();
-    offset = offset + system_pkt.pos();
-
-    println!("==============={:?}", pack_pkt);
-    println!("==============={:?}", system_pkt);
-
-    let pes_pkt = ps.get_packet(buffer.get(offset));
-    println!("{:?}", pes_pkt);
-    */
-
+    let mut buffer = bytebuf::ByteBuffer::new(1024*1024*4);
     buffer.push(&data[0..1280]);
 
     let mut offset:usize = 0;
@@ -62,4 +46,5 @@ fn main() {
             }
         }
     }
+    */
 }

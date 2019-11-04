@@ -1,6 +1,7 @@
 // https://en.wikipedia.org/wiki/MPEG_program_stream
 // https://en.wikipedia.org/wiki/Packetized_elementary_stream
 
+use std::ptr;
 use crate::bitbuf;
 
 #[allow(non_camel_case_types)]
@@ -30,6 +31,10 @@ pub struct MpegPS {
 
     pub has_pack_header: bool,
     pub has_system_header: bool,
+
+    buffer_: Vec<u8>,
+    offset_: usize,
+    len_: usize,
 }
 
 #[derive(Debug)]
@@ -71,6 +76,8 @@ impl MpegPS {
     }
 
     pub fn new() -> MpegPS {
+        let mut buffer:Vec<u8> = Vec::new();
+        buffer.resize(1024*1024*4, 0);
         MpegPS {
             has_pack_header:    false,
             has_system_header:  false,
@@ -78,10 +85,56 @@ impl MpegPS {
             bit_rate:           0,
             num_audio_streams:  -1,
             num_video_streams:  -1,
+
+            buffer_:    buffer,
+            offset_:    0,
+            len_:       0,
         }
     }
 
-    pub fn get_packet(&mut self, data: &[u8]) -> Result<PESPacketInfo, PacketError> {
+    pub fn push(&mut self, data: &[u8]) -> usize {
+        let len = data.len();
+
+        let mut copy_len = self.buffer_.len() - self.len_;
+        if copy_len > data.len() {
+            copy_len = len;
+        }
+        unsafe {
+            let dst: *mut u8 = self.buffer_.as_ptr().add(self.len_) as *mut u8;
+            let src: *const u8 = data.as_ptr();
+            ptr::copy(src, dst, copy_len);
+        }
+        self.len_ = self.len_ + copy_len;
+
+        return copy_len;
+    }
+
+    pub fn get(&mut self) -> Result<PESPacketInfo, PacketError> {
+        let data = &self.buffer_[self.offset_..self.len_];
+        let pkt_result = self.get_packet( data );
+
+        if let Ok(ref pkt) = pkt_result {
+            self.offset_ = self.offset_ + pkt.pos();
+        }
+        if let Err(ref e) = pkt_result {
+            if let PacketError::OUT_LENGTH(more) = e {
+                let push_size = more + 1280;
+                let remain = self.buffer_.len() - self.len_;
+                if push_size > remain {
+                    unsafe {
+                        let dst: *mut u8 = self.buffer_.as_ptr() as *mut u8;
+                        let src: *const u8 = self.buffer_.as_ptr().add(self.offset_);
+                        ptr::copy(src, dst, self.len_ - self.offset_);
+                    }
+                    self.len_ = self.len_ - self.offset_;
+                    self.offset_ = 0;
+                }
+            }
+        }
+        pkt_result
+    }
+
+    fn get_packet(&mut self, data: &[u8]) -> Result<PESPacketInfo, PacketError> {
         if !self.has_pack_header {
             if let Some(pos) = MpegPS::find_start_code(data, MpegPS::PACK_HEADER_CODE) {
                 return self.get_pack_header_packet(data, pos);
