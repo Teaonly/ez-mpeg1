@@ -137,11 +137,12 @@ impl MpegPS {
         let indicator = buffer.read(2).unwrap();
         if indicator == 0x00 {
             buffer.skip(4);
+            pes_length = pes_length - 1;
             return Ok(PESPacketInfo {
-                pkt_type:   PacketType::PES_UNKNOW,
+                pkt_type:   MpegPS::code2type(code),
                 code: code,
-                offset: pos,
-                len: buffer.pos() >> 3,
+                offset: pos + buffer.pos() >> 3,
+                len: pes_length,
                 pts: 0
             });
         } else if indicator == 0x01 {
