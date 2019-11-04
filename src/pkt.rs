@@ -41,9 +41,10 @@ pub struct MpegPS {
 pub struct PESPacketInfo {
     pub pkt_type: PacketType,
     pub code: u32,
+    pub pts: u64,
+
     pub offset: usize,
     pub len: usize,
-    pub pts: u64,
 }
 
 impl PESPacketInfo {
@@ -73,6 +74,10 @@ impl MpegPS {
         }
 
         return PacketType::PES_UNKNOW;
+    }
+
+    fn data<'a>(&'a self, pos: usize) -> &'a [u8] {
+        return &self.buffer_[self.offset_ + pos .. self.len_];
     }
 
     pub fn new() -> MpegPS {
@@ -110,9 +115,7 @@ impl MpegPS {
     }
 
     pub fn get(&mut self) -> Result<PESPacketInfo, PacketError> {
-        let data = &self.buffer_[self.offset_..self.len_];
-        let pkt_result = self.get_packet( data );
-
+        let pkt_result = self.get_packet();
         if let Ok(ref pkt) = pkt_result {
             self.offset_ = self.offset_ + pkt.pos();
         }
@@ -134,32 +137,34 @@ impl MpegPS {
         pkt_result
     }
 
-    fn get_packet(&mut self, data: &[u8]) -> Result<PESPacketInfo, PacketError> {
+    fn get_packet(&mut self) -> Result<PESPacketInfo, PacketError> {
         if !self.has_pack_header {
-            if let Some(pos) = MpegPS::find_start_code(data, MpegPS::PACK_HEADER_CODE) {
-                return self.get_pack_header_packet(data, pos);
+            if let Some(pos) = MpegPS::find_start_code(self.data(0), MpegPS::PACK_HEADER_CODE) {
+                return self.get_pack_header_packet(pos);
             } else {
                 return Err(PacketError::NO_START_CODE);
             }
         }
 
         if !self.has_system_header {
-            if let Some(pos) = MpegPS::find_start_code(data, MpegPS::SYSTEM_HEADER_CODE) {
-                return self.get_system_header_packet(data, pos);
+            if let Some(pos) = MpegPS::find_start_code(self.data(0), MpegPS::SYSTEM_HEADER_CODE) {
+                return self.get_system_header_packet(pos);
             } else {
                 return Err(PacketError::NO_START_CODE);
             }
         }
 
-        if let Some(pos) = MpegPS::find_start_code_of_av(data) {
-            return self.get_pes_packet(data, pos);
+        if let Some(pos) = MpegPS::find_start_code_of_av(self.data(0)) {
+            return self.get_pes_packet(pos);
         }
 
         return Err(PacketError::NO_START_CODE);
     }
 
-    fn get_pes_packet(&mut self, data: &[u8], pos:usize) -> Result<PESPacketInfo, PacketError> {
-        let mut buffer = bitbuf::BitBuffer::new( &data[pos..] );
+    fn get_pes_packet(&mut self, begin:usize) -> Result<PESPacketInfo, PacketError> {
+        let data = &self.data(begin);
+
+        let mut buffer = bitbuf::BitBuffer::new( data );
         if buffer.len() < 6 {
             return Err(PacketError::OUT_LENGTH(0));
         }
@@ -194,7 +199,7 @@ impl MpegPS {
             return Ok(PESPacketInfo {
                 pkt_type:   MpegPS::code2type(code),
                 code: code,
-                offset: pos + buffer.pos() >> 3,
+                offset: begin + buffer.pos() >> 3,
                 len: pes_length,
                 pts: 0
             });
@@ -220,14 +225,16 @@ impl MpegPS {
         return Ok(PESPacketInfo {
             pkt_type:   MpegPS::code2type(code),
             code: code,
-            offset: pos + (buffer.pos()>>3),
+            offset: begin + (buffer.pos()>>3),
             len: pes_length,
             pts: ts
         });
     }
 
-    fn get_system_header_packet(&mut self, data: &[u8], pos:usize) -> Result<PESPacketInfo, PacketError> {
-        let mut buffer = bitbuf::BitBuffer::new( &data[pos..] );
+    fn get_system_header_packet(&mut self, begin:usize) -> Result<PESPacketInfo, PacketError> {
+        let data = self.data(begin);
+
+        let mut buffer = bitbuf::BitBuffer::new( data );
         if buffer.len() < 6 {
             return Err(PacketError::OUT_LENGTH(0));
         }
@@ -245,9 +252,9 @@ impl MpegPS {
         }
         // get audio&video number
         buffer.skip(24);    //rate bound and marker bits
-        self.num_audio_streams = buffer.read(6).unwrap() as i32;
+        //self.num_audio_streams = buffer.read(6).unwrap() as i32;
         buffer.skip(5);
-        self.num_video_streams = buffer.read(5).unwrap() as i32;
+        //self.num_video_streams = buffer.read(5).unwrap() as i32;
 
         // skip to end of packet
         buffer.skip( (pes_length - 5) * 8);
@@ -255,7 +262,7 @@ impl MpegPS {
         let pkt = PESPacketInfo {
             pkt_type: PacketType::PS_SYSTEM_HEADER,
             code: code,
-            offset: pos,
+            offset: begin,
             len: buffer.pos() >> 3,
             pts: 0
         };
@@ -264,8 +271,10 @@ impl MpegPS {
         Ok(pkt)
     }
 
-    fn get_pack_header_packet(&mut self, data: &[u8], pos:usize) -> Result<PESPacketInfo, PacketError> {
-        let mut buffer = bitbuf::BitBuffer::new( &data[pos..] );
+    fn get_pack_header_packet(&mut self, begin:usize) -> Result<PESPacketInfo, PacketError> {
+        let data = self.data(begin);
+
+        let mut buffer = bitbuf::BitBuffer::new( data );
         if buffer.len() < 12 {
             return Err(PacketError::OUT_LENGTH(12 - buffer.len()));
         }
@@ -290,18 +299,18 @@ impl MpegPS {
         buffer.skip(1);
         clock = clock | (buffer.read(15).unwrap() as u64);
         buffer.skip(1);
-        self.system_clock_ref = clock;
+        //self.system_clock_ref = clock;
 
         // skip bitrate and stuff
         buffer.skip(1);
         let bit_rate = buffer.read(22).unwrap() as u64;
         buffer.skip(1);
-        self.bit_rate = bit_rate;
+        //self.bit_rate = bit_rate;
 
         let pkt = PESPacketInfo {
             pkt_type: PacketType::PS_PACK_HEADER,
             code: code,
-            offset: pos,
+            offset: begin,
             len: buffer.pos() / 8,
             pts: 0
         };
@@ -310,7 +319,7 @@ impl MpegPS {
         Ok(pkt)
     }
 
-    fn find_start_code_of_av(data: &[u8]) -> Option<usize> {
+    fn find_start_code_of_av(data:&[u8]) -> Option<usize> {
         if data.len() < 4 {
             return None
         }
@@ -330,7 +339,7 @@ impl MpegPS {
         None
     }
 
-    fn find_start_code(data: &[u8], code: u32) -> Option<usize> {
+    fn find_start_code(data:&[u8], code:u32) -> Option<usize> {
         if data.len() < 4 {
             return None
         }
