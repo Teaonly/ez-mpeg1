@@ -7,6 +7,26 @@ pub struct RingBitBuffer {
 }
 
 impl RingBitBuffer {
+    fn round(&self, p: usize) -> usize {
+        (p + self.cap_) % self.cap_
+    }
+
+    pub fn len(&self) -> usize {
+        if self.empty() {
+            return 0;
+        }
+        let has_bytes:usize = (self.wi_ + self.cap_ - (self.rbi_ >> 3) ) % self.cap_;
+        let has_bits = has_bytes * 8 - (self.rbi_ & 0x07);
+        has_bits
+    }
+
+    pub fn has(&self, count: usize) -> bool {
+        if self.len() >= count {
+            return true;
+        }
+        return false;
+    }
+
     pub fn new() -> Self {
         let mut buffer:Vec<u8> = Vec::new();
         buffer.resize(1024*1024*4, 0);
@@ -27,39 +47,28 @@ impl RingBitBuffer {
     }
 
     pub fn full(&self) -> bool {
-        if (self.rbi_ >> 3) == ((self.wi_ + 1) % self.cap_)  {
+        if self.round(self.wi_ + 1) == (self.rbi_ >> 3) {
             return true;
         }
         return false;
     }
 
-    pub fn push(&mut self, data: &[u8]) -> usize {
+    pub fn push(&mut self, data: &[u8]) -> Option<usize> {
+        let mut byte_space:usize = ((self.rbi_>>3) + self.cap_ - self.wi_ ) % self.cap_;
+        if byte_space == 0 {
+            byte_space = self.cap_;
+        }
+        if byte_space < 1 + data.len() {
+            return None
+        }
+
         let mut wlen = 0;
         while wlen < data.len() {
-            if self.full() {
-                break;
-            }
             self.buffer_[self.wi_] = data[wlen];
+            self.wi_ = self.round(self.wi_ + 1);
             wlen += 1;
-            self.wi_ = (self.wi_ + 1) % self.cap_;
         }
-        wlen
-    }
-
-    pub fn len(&self) -> usize {
-        if self.empty() {
-            return 0;
-        }
-        let mut has_bytes:usize = (self.wi_ + self.cap_ - (self.rbi_ >> 3) ) % self.cap_;
-        let has_bits = has_bytes * 8 - (self.rbi_ & 0x07);
-        has_bits
-    }
-
-    pub fn has(&self, count: usize) -> bool {
-        if self.len() >= count {
-            return true;
-        }
-        return false;
+        Some(wlen)
     }
 
     pub fn skip(&mut self, count: usize) -> usize {
@@ -70,12 +79,12 @@ impl RingBitBuffer {
         0
     }
 
-    pub fn read(&mut self, mut count: usize) -> Option<u32> {
+    pub fn read(&mut self, mut count: usize) -> u32 {
         if !self.has(count) {
-            return None;
+            return 0x00;
         }
-        let mut value:u32 = 0x00;
 
+        let mut value:u32 = 0x00;
         while count > 0 {
             let current_byte = self.buffer_[self.rbi_ >> 3] as u32;
 
@@ -95,8 +104,45 @@ impl RingBitBuffer {
 
             count = count - read;
         }
+        value
+    }
 
-        Some(value)
+    pub fn include_two_code(&self, code:u32 ) -> bool {
+        let mut pos = (self.rbi_ + 7) >> 3;
+        let mut pattern:u32 = 0xFFFFFFFF;
+        let mut times = 0;
+        while pos != self.wi_ {
+            pattern = (pattern << 8) | (self.buffer_[pos] as u32);
+            pos = self.round(pos+1);
+
+            if pattern == code {
+                times += 1;
+                if times == 2 {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    pub fn find_start_code(&mut self, code: u32) -> bool {
+        // aligen to byte
+        self.rbi_ = ((self.rbi_ + 7) >> 3) << 3;
+        self.rbi_ = self.rbi_ % (self.cap_ * 8);
+
+        let mut pattern:u32 = 0xFFFFFFFF;
+        while (self.rbi_ >> 3) != self.wi_ {
+            pattern = (pattern << 8) | (self.buffer_[self.rbi_>>3] as u32);
+
+            self.rbi_ += 8;
+            self.rbi_ = self.rbi_ % (self.cap_ * 8);
+
+            if pattern == code {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
 

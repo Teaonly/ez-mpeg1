@@ -13,7 +13,7 @@ fn main() {
     let mut data:Vec<u8> = Vec::new();
     let _result = file.read_to_end(&mut data);
 
-    //let mut vcodec = video::Mpeg1Video::new();
+    let mut vcodec = video::Mpeg1Video::new();
 
     let mut index:usize = 1400;
     let mut ps = pkt::MpegPS::new();
@@ -24,7 +24,13 @@ fn main() {
         if let Ok(ref pkt) = pkt_result {
             println!("===={:?}", pkt);
             if pkt.pes_type == pkt::PacketType::PES_VIDEO {
-
+                let payload = ps.payload(pkt);
+                if vcodec.push(payload).is_none() {
+                    panic!("Decoder's buffer is full,can't do any decoding");
+                }
+                if vcodec.include_one_frame() {
+                    vcodec.decode();
+                }
             }
         }
         if let Err(e) = pkt_result {
