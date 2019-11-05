@@ -4,6 +4,7 @@ use std::io::Read;
 
 mod bitbuf;
 mod pkt;
+mod video;
 
 fn main() {
     // file to [u8]
@@ -12,7 +13,9 @@ fn main() {
     let mut data:Vec<u8> = Vec::new();
     let _result = file.read_to_end(&mut data);
 
-    let mut index:usize = 1280;
+    let mut vcodec = video::Mpeg1Video::new();
+
+    let mut index:usize = 1400;
     let mut ps = pkt::MpegPS::new();
     ps.push(&data[0..index]);
 
@@ -20,10 +23,13 @@ fn main() {
         let pkt_result = ps.get();
         if let Ok(ref pkt) = pkt_result {
             println!("===={:?}", pkt);
+            if pkt.pes_type == pkt::PacketType::PES_VIDEO {
+
+            }
         }
         if let Err(e) = pkt_result {
-            if let pkt::PacketError::OUT_LENGTH(_more) = e {
-                let mut pushed = 1280;
+            if let pkt::PacketError::OUT_LENGTH(more) = e {
+                let mut pushed = 1280 + more;
                 if pushed > data.len() - index {
                     pushed = data.len() - index;
                 }

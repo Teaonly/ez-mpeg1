@@ -9,7 +9,6 @@ use crate::bitbuf;
 pub enum PacketError {
     OUT_LENGTH(usize),
     NO_START_CODE,
-    CODE_NOT_MATCH,
     FORMAT_ERROR,
 }
 
@@ -40,13 +39,13 @@ pub struct MpegPS {
 
 #[derive(Debug)]
 pub struct PESPacketInfo {
-    pub pkt_type: PacketType,
+    pub pes_type: PacketType,
     pub code: u8,
     pub pts: u64,
 
     pub offset: usize,
     pub len: usize,
-    pub payload: isize,
+    pub payload: usize,
 }
 
 impl MpegPS {
@@ -123,10 +122,18 @@ impl MpegPS {
         return copy_len;
     }
 
+    pub fn payload(&self, pkt: &PESPacketInfo) -> &[u8] {
+        if pkt.offset + pkt.len > self.len_ {
+            panic!("Can't get payload from buffer");
+        }
+        &self.buffer_[(pkt.offset  + pkt.payload)..(pkt.offset + pkt.len)]
+    }
+
     pub fn get(&mut self) -> Result<PESPacketInfo, PacketError> {
-        let pkt_result = self.get_packet();
-        if let Ok(ref pkt) = pkt_result {
+        let mut pkt_result = self.get_packet();
+        if let Ok(ref mut pkt) = pkt_result {
             self.offset_ = self.offset_ + pkt.len + pkt.offset;
+            pkt.offset = self.offset_ - pkt.len;
         }
         if let Err(ref e) = pkt_result {
             if let PacketError::OUT_LENGTH(more) = e {
@@ -183,7 +190,7 @@ impl MpegPS {
         }
         if MpegPS::code2type(code) == PacketType::PES_SKIP {
             return Ok(PESPacketInfo {
-                pkt_type:   PacketType::PES_SKIP,
+                pes_type:   PacketType::PES_SKIP,
                 code: code,
                 offset: begin,
                 len: pes_length + 6,
@@ -212,7 +219,7 @@ impl MpegPS {
             buffer.skip(4);
             payload += 1;
             return Ok(PESPacketInfo {
-                pkt_type:   MpegPS::code2type(code),
+                pes_type:   MpegPS::code2type(code),
                 code: code,
                 offset: begin ,
                 len: pes_length + 6,
@@ -239,7 +246,7 @@ impl MpegPS {
         }
 
         return Ok(PESPacketInfo {
-            pkt_type:   MpegPS::code2type(code),
+            pes_type:   MpegPS::code2type(code),
             code: code,
             offset: begin,
             len: pes_length + 6,
@@ -258,9 +265,6 @@ impl MpegPS {
 
         // check code
         let code:u8 = (buffer.read(32).unwrap() & 0xFF) as u8;
-        if code != MpegPS::SYSTEM_HEADER_CODE {
-            return Err(PacketError::CODE_NOT_MATCH);
-        }
 
         // get length
         let pes_length = buffer.read(16).unwrap() as usize;
@@ -278,7 +282,7 @@ impl MpegPS {
         buffer.skip( (pes_length - 5) * 8);
 
         let pkt = PESPacketInfo {
-            pkt_type: PacketType::PS_SYSTEM_HEADER,
+            pes_type: PacketType::PS_SYSTEM_HEADER,
             code: code,
             offset: begin,
             len: buffer.pos() >> 3,
@@ -302,9 +306,6 @@ impl MpegPS {
 
         // check code
         let code:u8 = (buffer.read(32).unwrap() & 0xFF) as u8;
-        if code != MpegPS::PACK_HEADER_CODE {
-            return Err(PacketError::CODE_NOT_MATCH);
-        }
 
         // check marker
         let marker_bits = buffer.read(4).unwrap();
@@ -327,7 +328,7 @@ impl MpegPS {
         buffer.skip(1);
 
         let pkt = PESPacketInfo {
-            pkt_type: PacketType::PS_PACK_HEADER,
+            pes_type: PacketType::PS_PACK_HEADER,
             code: code,
             offset: begin,
             len: buffer.pos() >> 3,
