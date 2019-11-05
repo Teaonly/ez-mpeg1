@@ -64,6 +64,9 @@ impl RingBitBuffer {
         Some(wlen)
     }
 
+    pub fn back(&mut self, count: usize) {
+        self.rbi_ = (self.rbi_ + self.cap_ * 8 - count) % (self.cap_ * 8);
+    }
     pub fn skip(&mut self, count: usize) -> usize {
         if self.has(count) {
             self.rbi_ = (self.rbi_ + count) % (self.cap_ * 8);
@@ -115,6 +118,26 @@ impl RingBitBuffer {
                 }
             }
         }
+        return false;
+    }
+
+    pub fn find_start(&mut self) -> bool {
+        // aligen to byte
+        self.rbi_ = ((self.rbi_ + 7) >> 3) << 3;
+        self.rbi_ = self.rbi_ % (self.cap_ * 8);
+
+        let mut pattern:u32 = 0xFFFFFF00;
+        while (self.rbi_ >> 3) != self.wi_ {
+            pattern = (pattern << 8) | (self.buffer_[self.rbi_>>3] as u32);
+
+            self.rbi_ += 8;
+            self.rbi_ = self.rbi_ % (self.cap_ * 8);
+
+            if pattern == 0x000001 {
+                return true;
+            }
+        }
+
         return false;
     }
 

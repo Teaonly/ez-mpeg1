@@ -54,6 +54,8 @@ struct CodecInfo {
     pub aspect_ratio: u32,
     pub frame_rate: f32,
 
+    pub current_picture_type: u32,
+
     pub _parsed_:    bool,
 }
 
@@ -62,15 +64,34 @@ struct QuantMatrix {
     pub non_intra_quant_matrix: [u8;64],
 }
 
+#[derive(Default, Clone)]
+struct VideoMotion {
+    pub full_px: i32,
+    pub is_set: i32,
+    pub r_size: i32,
+    pub h:  i32,
+    pub w: i32,
+}
+
 pub struct Mpeg1Video {
     info_:      CodecInfo,
     qmatrix_:   QuantMatrix,
+    fmotion_:   VideoMotion,
+    bmotion_:   VideoMotion,
     buffer_:    bitbuf::RingBitBuffer,
 }
 
 impl Mpeg1Video {
     const PICTURE_START_CODE: u32  = 0x00000100;
     const SEQUENCE_START_CODE: u32 = 0x000001B3;
+    const START_EXTENSION_CODE: u32 = 0xB5;
+    const USER_DATA_CODE: u32 = 0xB2;
+    const SLICE_START: u32 = 0x01;
+    const SLICE_LAST: u32 = 0xAF;
+
+    const PICTURE_TYPE_I: u32 = 0x01;
+    const PICTURE_TYPE_P: u32 = 0x02;
+    const PICTURE_TYPE_B: u32 = 0x03;
 
     pub fn new() -> Self {
         let mut info:    CodecInfo = Default::default();
@@ -79,11 +100,14 @@ impl Mpeg1Video {
         let intra_quant_matrix:[u8; 64] = [0; 64];
         let non_intra_quant_matrix:[u8; 64] = [0; 64];
         let qm = QuantMatrix{ intra_quant_matrix, non_intra_quant_matrix};
+        let motion: VideoMotion = Default::default();
 
         let buffer = bitbuf::RingBitBuffer::new();
         Mpeg1Video {
             info_:      info,
             qmatrix_:   qm,
+            fmotion_:   motion.clone(),
+            bmotion_:   motion,
             buffer_:    buffer,
         }
     }
@@ -106,14 +130,6 @@ impl Mpeg1Video {
             }
         }
         return self.decode_picture();
-    }
-
-    fn decode_picture(&mut self) -> DecodeResult {
-        if self.buffer_.find_start_code(Mpeg1Video::PICTURE_START_CODE) == false {
-            return DecodeResult::InternalError;
-        }
-
-        DecodeResult::InternalError
     }
 
     fn decode_sequence_header(&mut self) {
@@ -158,6 +174,68 @@ impl Mpeg1Video {
 
         self.info_._parsed_ = true;
     }
+
+    fn decode_picture(&mut self) -> DecodeResult {
+        if self.buffer_.find_start_code(Mpeg1Video::PICTURE_START_CODE) == false {
+            panic!("##########");
+            return DecodeResult::InternalError;
+        }
+
+        // get current picture type
+        self.buffer_.skip(10); // skip temporalReference
+        self.info_.current_picture_type = self.buffer_.read(3);
+        self.buffer_.skip(16); // skip vbv_delay
+
+        if self.info_.current_picture_type == 0 ||
+            self.info_.current_picture_type > Mpeg1Video::PICTURE_TYPE_B {
+            panic!("##########");
+            return DecodeResult::InternalError;
+        }
+
+        // forward full_px, f_code
+        if self.info_.current_picture_type  == Mpeg1Video::PICTURE_TYPE_P ||
+            self.info_.current_picture_type > Mpeg1Video::PICTURE_TYPE_B {
+
+            self.fmotion_.full_px = self.buffer_.read(1) as i32;
+            let f_code: i32 = self.buffer_.read(3) as i32;
+            if f_code == 0x00 {
+                panic!("##########");
+                return DecodeResult::InternalError;
+            }
+
+            self.fmotion_.r_size = f_code - 1;
+        }
+
+        // backward full_px, f_code
+        if self.info_.current_picture_type  == Mpeg1Video::PICTURE_TYPE_B {
+            self.bmotion_.full_px = self.buffer_.read(1) as i32;
+            let f_code: i32 = self.buffer_.read(3) as i32;
+            if f_code == 0x00 {
+                panic!("##########");
+                return DecodeResult::InternalError;
+            }
+            self.bmotion_.r_size = f_code - 1;
+        }
+
+        loop {
+            // skip user data and
+            if self.buffer_.find_start() == false {
+                return DecodeResult::InternalError;
+            }
+            let code = self.buffer_.read(8);
+            if code == Mpeg1Video::USER_DATA_CODE || code == Mpeg1Video::START_EXTENSION_CODE {
+                continue;
+            }
+            if code == Mpeg1Video::SLICE_START {
+                break;
+            }
+            panic!("##########");
+            return DecodeResult::InternalError;
+        }
+        println!("Do some thing");
+        return DecodeResult::InternalError;
+    }
+
 
 }
 
