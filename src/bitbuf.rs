@@ -46,13 +46,6 @@ impl RingBitBuffer {
         return false;
     }
 
-    pub fn full(&self) -> bool {
-        if self.round(self.wi_ + 1) == (self.rbi_ >> 3) {
-            return true;
-        }
-        return false;
-    }
-
     pub fn push(&mut self, data: &[u8]) -> Option<usize> {
         let mut byte_space:usize = ((self.rbi_>>3) + self.cap_ - self.wi_ ) % self.cap_;
         if byte_space == 0 {

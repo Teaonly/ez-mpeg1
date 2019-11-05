@@ -28,9 +28,7 @@ fn main() {
                 if vcodec.push(payload).is_none() {
                     panic!("Decoder's buffer is full,can't do any decoding");
                 }
-                if vcodec.include_one_frame() {
-                    vcodec.decode();
-                }
+                vcodec.decode();
             }
         }
         if let Err(e) = pkt_result {
