@@ -13,7 +13,7 @@ fn main() {
     let mut data:Vec<u8> = Vec::new();
     let _result = file.read_to_end(&mut data);
 
-    let mut vcodec = video::Mpeg1Video::new();
+    //let mut vcodec = video::Mpeg1Video::new();
 
     let mut index:usize = 1400;
     let mut ps = pkt::MpegPS::new();

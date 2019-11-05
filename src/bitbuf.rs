@@ -46,13 +46,17 @@ impl RingBitBuffer {
         wlen
     }
 
-    pub fn has(&self, count: usize) -> bool {
+    pub fn len(&self) -> usize {
         if self.empty() {
-            return false;
+            return 0;
         }
-        let mut has_bytes:usize = (self.rbi_ + self.cap_ - (self.rbi_ >> 3) ) % self.cap_;
+        let mut has_bytes:usize = (self.wi_ + self.cap_ - (self.rbi_ >> 3) ) % self.cap_;
         let has_bits = has_bytes * 8 - (self.rbi_ & 0x07);
-        if has_bits >= count {
+        has_bits
+    }
+
+    pub fn has(&self, count: usize) -> bool {
+        if self.len() >= count {
             return true;
         }
         return false;
