@@ -314,7 +314,6 @@ impl Mpeg1Video {
         }
         */
 
-
         return DecodeResult::GotOneFrame;
     }
 
@@ -421,11 +420,11 @@ impl Mpeg1Video {
         self.runtime_.motion_forward.is_set = (self.runtime_.macroblock_type & 0x08);
 
         // Quantizer scale
-        if ((self.runtime_.macroblock_type & 0x10) != 0) {
+        if (self.runtime_.macroblock_type & 0x10) != 0 {
             self.runtime_.quantizer_scale = self.buffer_.read(5);
         }
 
-        if (self->macroblock_intra) {
+        if self.runtime_.macroblock_intra != 0 {
             // Intra-coded macroblocks reset motion vectors
             self.runtime_.motion_forward.h = 0;
             self.runtime_.motion_forward.v = 0;
@@ -436,14 +435,14 @@ impl Mpeg1Video {
             self.runtime_.dc_predictor_1 = 128;
             self.runtime_.dc_predictor_2 = 128;
 
-            plm_video_decode_motion_vectors(self);
-            plm_video_predict_macroblock(self);
+            self.decode_motion_vectors();
+            self.predict_macroblock();
         }
 
         // Decode blocks
         let cbp:u32 =
             if self.runtime_.macroblock_pattern != 0 {
-                self.buffer_.read_vlc(&vlc::CODE_BLOCK_PATTERN) as u32
+                self.buffer_.read_vlc(&vlc::MP1V_CODE_BLOCK_PATTERN) as u32
             } else {
                 if self.runtime_.macroblock_intra != 0x00 {
                     0x3f
@@ -452,13 +451,13 @@ impl Mpeg1Video {
                 }
             };
 
-        for (int block = 0, mask = 0x20; block < 6; block++) {
+        let mut mask:u32 = 0x20;
+        for block in 0..6 {
             if ((cbp & mask) != 0) {
-                plm_video_decode_block(self, block);
+                self.decode_block(block as i32);
             }
             mask >>= 1;
         }
-
     }
 
     fn predict_macroblock(&mut self) {
@@ -469,9 +468,8 @@ impl Mpeg1Video {
 
     }
 
-    fn predict_macroblock(&mut self) {
+    fn decode_block(&mut self, blk: i32) {
 
     }
-
 }
 
