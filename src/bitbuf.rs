@@ -103,6 +103,27 @@ impl RingBitBuffer {
         value
     }
 
+    pub fn read_vlc(&mut self, vlc_table: &[(i16, i16)]) -> i16 {
+        let mut state: &(i16, i16) = &(0, 0);
+        loop {
+            state = &vlc_table[state.0 as usize + self.read(1) as usize];
+            if state.0 <= 0 {
+                break;
+            }
+        }
+        return state.1
+    }
+
+    pub fn next_is_start(&mut self) -> bool {
+        let oldbi = self.rbi_;
+
+        self.rbi_ = (self.rbi_ + 7) >> 3;
+        let ret = self.read(24) == 0x000001;
+        self.rbi_ = oldbi;
+
+        return ret;
+    }
+
     pub fn include_two_code(&self, code:u32 ) -> bool {
         let mut pos = (self.rbi_ + 7) >> 3;
         let mut pattern:u32 = 0xFFFFFFFF;
@@ -133,11 +154,10 @@ impl RingBitBuffer {
             self.rbi_ += 8;
             self.rbi_ = self.rbi_ % (self.cap_ * 8);
 
-            if pattern == 0x000001 {
+            if (pattern & 0x00FFFFFF) == 0x000001 {
                 return true;
             }
         }
-
         return false;
     }
 
@@ -160,6 +180,8 @@ impl RingBitBuffer {
 
         return false;
     }
+
+
 }
 
 pub struct BitBuffer<'a> {

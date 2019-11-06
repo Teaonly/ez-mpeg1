@@ -5,6 +5,7 @@ use std::io::Read;
 mod bitbuf;
 mod pkt;
 mod video;
+mod vlc;
 
 fn main() {
     // file to [u8]
@@ -31,6 +32,7 @@ fn main() {
                 vcodec.decode();
             }
         }
+
         if let Err(e) = pkt_result {
             if let pkt::PacketError::OUT_LENGTH(more) = e {
                 let mut pushed = 1280 + more;

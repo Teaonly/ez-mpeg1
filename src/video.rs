@@ -1,6 +1,7 @@
 // http://dvd.sourceforge.net/dvdinfo/mpeghdrs.html
 
 use crate::bitbuf;
+use crate::vlc;
 
 static MP1V_FRAME_RATE: [f32; 16] = [
     0.000, 23.976, 24.000, 25.000, 29.970, 30.000, 50.000, 59.940,
@@ -40,6 +41,16 @@ static MP1V_NON_INTRA_QUANT_MATRIX: [u8; 64] = [
     16, 16, 16, 16, 16, 16, 16, 16
 ];
 
+static MP1V_PREMULTIPLIER_MATRIX: [u8; 64] = [
+    32, 44, 42, 38, 32, 25, 17,  9,
+    44, 62, 58, 52, 44, 35, 24, 12,
+    42, 58, 55, 49, 42, 33, 23, 12,
+    38, 52, 49, 44, 38, 30, 20, 10,
+    32, 44, 42, 38, 32, 25, 17,  9,
+    25, 35, 33, 30, 25, 20, 14,  7,
+    17, 24, 23, 20, 17, 14,  9,  5,
+     9, 12, 12, 10,  9,  7,  5,  2
+];
 
 pub enum DecodeResult {
     GotOneFrame,
@@ -54,7 +65,15 @@ struct CodecInfo {
     pub aspect_ratio: u32,
     pub frame_rate: f32,
 
-    pub current_picture_type: u32,
+    pub mb_width: u32,
+    pub mb_height: u32,
+    pub mb_size: u32,
+
+    pub luma_width: u32,
+    pub luma_height: u32,
+
+    pub chroma_width: u32,
+    pub chroma_height: u32,
 
     pub _parsed_:    bool,
 }
@@ -65,20 +84,36 @@ struct QuantMatrix {
 }
 
 #[derive(Default, Clone)]
-struct VideoMotion {
+pub struct VideoMotion {
     pub full_px: i32,
     pub is_set: i32,
     pub r_size: i32,
     pub h:  i32,
-    pub w: i32,
+    pub v:  i32,
+}
+
+#[derive(Default)]
+pub struct VideoRuntime {
+    pub quantizer_scale:   u32,
+    pub picture_type:      u32,
+
+    pub dc_predictor_0:    i32,
+    pub dc_predictor_1:    i32,
+    pub dc_predictor_2:    i32,
+
+    pub motion_forward:    VideoMotion,
+
+    pub macroblock_address: i32,
+    pub mb_row : i32,
+    pub mb_col : i32,
 }
 
 pub struct Mpeg1Video {
+    buffer_:    bitbuf::RingBitBuffer,
+
     info_:      CodecInfo,
     qmatrix_:   QuantMatrix,
-    fmotion_:   VideoMotion,
-    bmotion_:   VideoMotion,
-    buffer_:    bitbuf::RingBitBuffer,
+    runtime_:   VideoRuntime,
 }
 
 impl Mpeg1Video {
@@ -91,7 +126,6 @@ impl Mpeg1Video {
 
     const PICTURE_TYPE_I: u32 = 0x01;
     const PICTURE_TYPE_P: u32 = 0x02;
-    const PICTURE_TYPE_B: u32 = 0x03;
 
     pub fn new() -> Self {
         let mut info:    CodecInfo = Default::default();
@@ -100,14 +134,13 @@ impl Mpeg1Video {
         let intra_quant_matrix:[u8; 64] = [0; 64];
         let non_intra_quant_matrix:[u8; 64] = [0; 64];
         let qm = QuantMatrix{ intra_quant_matrix, non_intra_quant_matrix};
-        let motion: VideoMotion = Default::default();
+        let runtime: VideoRuntime = Default::default();
 
         let buffer = bitbuf::RingBitBuffer::new();
         Mpeg1Video {
             info_:      info,
             qmatrix_:   qm,
-            fmotion_:   motion.clone(),
-            bmotion_:   motion,
+            runtime_:   runtime,
             buffer_:    buffer,
         }
     }
@@ -172,6 +205,26 @@ impl Mpeg1Video {
             }
         }
 
+        self.info_.mb_width = (self.info_.pic_width + 15) >> 4;
+        self.info_.mb_height = (self.info_.pic_height + 15) >> 4;
+        self.info_.luma_width = self.info_.mb_width << 4;
+        self.info_.luma_height = self.info_.mb_height << 4;
+        self.info_.chroma_width = self.info_.mb_width << 3;
+        self.info_.chroma_height = self.info_.mb_height << 3;
+
+        // TODO: init framebuffer
+        /*
+        // Allocate one big chunk of data for all 3 frames = 9 planes
+        size_t luma_plane_size = self->luma_width * self->luma_height;
+        size_t chroma_plane_size = self->chroma_width * self->chroma_height;
+        size_t frame_data_size = (luma_plane_size + 2 * chroma_plane_size);
+
+        self->frames_data = (uint8_t*)malloc(frame_data_size * 3);
+        plm_video_init_frame(self, &self->frame_current, self->frames_data + frame_data_size * 0);
+        plm_video_init_frame(self, &self->frame_forward, self->frames_data + frame_data_size * 1);
+        plm_video_init_frame(self, &self->frame_backward, self->frames_data + frame_data_size * 2);
+        */
+
         self.info_._parsed_ = true;
     }
 
@@ -183,42 +236,30 @@ impl Mpeg1Video {
 
         // get current picture type
         self.buffer_.skip(10); // skip temporalReference
-        self.info_.current_picture_type = self.buffer_.read(3);
+        self.runtime_.picture_type = self.buffer_.read(3);
         self.buffer_.skip(16); // skip vbv_delay
 
-        if self.info_.current_picture_type == 0 ||
-            self.info_.current_picture_type > Mpeg1Video::PICTURE_TYPE_B {
+        if self.runtime_.picture_type != Mpeg1Video::PICTURE_TYPE_I &&
+            self.runtime_.picture_type != Mpeg1Video::PICTURE_TYPE_P {
             panic!("##########");
             return DecodeResult::InternalError;
         }
 
         // forward full_px, f_code
-        if self.info_.current_picture_type  == Mpeg1Video::PICTURE_TYPE_P ||
-            self.info_.current_picture_type > Mpeg1Video::PICTURE_TYPE_B {
+        if self.runtime_.picture_type  == Mpeg1Video::PICTURE_TYPE_P {
+            self.runtime_.motion_forward.full_px = self.buffer_.read(1) as i32;
 
-            self.fmotion_.full_px = self.buffer_.read(1) as i32;
             let f_code: i32 = self.buffer_.read(3) as i32;
             if f_code == 0x00 {
                 panic!("##########");
                 return DecodeResult::InternalError;
             }
 
-            self.fmotion_.r_size = f_code - 1;
-        }
-
-        // backward full_px, f_code
-        if self.info_.current_picture_type  == Mpeg1Video::PICTURE_TYPE_B {
-            self.bmotion_.full_px = self.buffer_.read(1) as i32;
-            let f_code: i32 = self.buffer_.read(3) as i32;
-            if f_code == 0x00 {
-                panic!("##########");
-                return DecodeResult::InternalError;
-            }
-            self.bmotion_.r_size = f_code - 1;
+            self.runtime_.motion_forward.r_size = f_code - 1;
         }
 
         loop {
-            // skip user data and
+            // skip user data and extension
             if self.buffer_.find_start() == false {
                 return DecodeResult::InternalError;
             }
@@ -229,13 +270,139 @@ impl Mpeg1Video {
             if code == Mpeg1Video::SLICE_START {
                 break;
             }
-            panic!("##########");
+            panic!("#### EXIT FOR DEBUG ###");
             return DecodeResult::InternalError;
         }
-        println!("Do some thing");
-        return DecodeResult::InternalError;
+
+        // TODO
+        /*
+        plm_frame_t frame_temp = self->frame_forward;
+
+        if (
+            self->picture_type == PLM_VIDEO_PICTURE_TYPE_INTRA ||
+            self->picture_type == PLM_VIDEO_PICTURE_TYPE_PREDICTIVE
+        ) {
+            self->frame_forward = self->frame_backward;
+        }
+        */
+
+        let mut next_code = Mpeg1Video::SLICE_START;
+        while next_code >= Mpeg1Video::SLICE_START && next_code <= Mpeg1Video::SLICE_LAST {
+            self.decode_slice(next_code);
+
+            if self.buffer_.find_start() == true {
+                next_code = self.buffer_.read(8);
+            } else {
+                panic!("#### EXIT FOR DEBUG ###");
+            }
+        }
+
+        self.buffer_.back(32);
+
+        // TODO
+        /*
+        plm_frame_t frame_temp = self->frame_forward;
+
+        if (
+            self->picture_type == PLM_VIDEO_PICTURE_TYPE_INTRA ||
+            self->picture_type == PLM_VIDEO_PICTURE_TYPE_PREDICTIVE
+        ) {
+            self->frame_forward = self->frame_backward;
+        }
+        */
+
+
+        return DecodeResult::GotOneFrame;
     }
 
+    fn decode_slice(&mut self, slice_code: u32) {
+        self.runtime_.macroblock_address = ((slice_code - 1) * self.info_.mb_width) as i32 - 1;
 
+        // Reset motion vectors and DC predictors
+        self.runtime_.motion_forward.h = 0;
+        self.runtime_.motion_forward.v = 0;
+        self.runtime_.dc_predictor_0 = 128;
+        self.runtime_.dc_predictor_1 = 128;
+        self.runtime_.dc_predictor_2 = 128;
+
+        // quantizer scale
+        self.runtime_.quantizer_scale = self.buffer_.read(5);
+
+        // skip extra
+        while self.buffer_.read(1) != 0x00 {
+            self.buffer_.read(8);
+        }
+
+        let mut slice_begin = true;
+        loop {
+            self.decode_macroblock(slice_begin);
+            slice_begin = false;
+
+            if  (self.runtime_.macroblock_address >= self.info_.mb_size as i32 - 1)
+                || self.buffer_.next_is_start() {
+                break;
+            }
+        }
+    }
+
+    fn decode_macroblock(&mut self, slice_begin:bool) {
+        // Decode self->macroblock_address_increment
+        let mut increment:i16 = 0;
+
+        let mut t = self.buffer_.read_vlc(&vlc::MP1V_MACROBLOCK_ADDRESS_INCREMENT);
+        while t == 34 {
+            // macroblock_stuffing
+            t = self.buffer_.read_vlc(&vlc::MP1V_MACROBLOCK_ADDRESS_INCREMENT);
+        }
+        while t == 35 {
+            increment += 33;
+            t = self.buffer_.read_vlc(&vlc::MP1V_MACROBLOCK_ADDRESS_INCREMENT);
+        }
+        increment += t;
+
+        if slice_begin {
+            // The first self->macroblock_address_increment of each slice is relative
+            // to beginning of the preverious row, not the preverious macroblock
+            self.runtime_.macroblock_address += increment as i32;
+        } else {
+            if self.runtime_.macroblock_address + increment as i32 >= self.info_.mb_size as i32 {
+                panic!("macroblock skip out of picture size");
+                return; // invalid
+            }
+
+            if increment > 1 {
+                // Skipped macroblocks reset DC predictors
+                self.runtime_.dc_predictor_0 = 128;
+                self.runtime_.dc_predictor_1 = 128;
+                self.runtime_.dc_predictor_2 = 128;
+
+                // Skipped macroblocks in P-pictures reset motion vectors
+                if self.runtime_.picture_type == Mpeg1Video::PICTURE_TYPE_P {
+                    self.runtime_.motion_forward.h = 0;
+                    self.runtime_.motion_forward.v = 0;
+                }
+            }
+
+            // Predict skipped macroblocks
+            while increment > 1 {
+                self.runtime_.macroblock_address += 1;
+                self.runtime_.mb_row = self.runtime_.macroblock_address / self.info_.mb_width as i32;
+                self.runtime_.mb_col = self.runtime_.macroblock_address % self.info_.mb_width as i32;
+
+                self.predict_macroblock();
+                increment -= 1;
+            }
+            self.runtime_.macroblock_address += 1;
+        }
+
+        self.runtime_.mb_row = self.runtime_.macroblock_address / self.info_.mb_width as i32;
+        self.runtime_.mb_col = self.runtime_.macroblock_address % self.info_.mb_width as i32;
+
+
+    }
+
+    fn predict_macroblock(&mut self) {
+        //TODO
+    }
 }
 
