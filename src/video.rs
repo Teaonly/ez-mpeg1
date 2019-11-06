@@ -103,9 +103,12 @@ pub struct VideoRuntime {
 
     pub motion_forward:    VideoMotion,
 
-    pub macroblock_address: i32,
     pub mb_row : i32,
     pub mb_col : i32,
+    pub macroblock_pattern:  i32,
+    pub macroblock_intra:   i32,
+    pub macroblock_type:    i32,
+    pub macroblock_address: i32,
 }
 
 pub struct Mpeg1Video {
@@ -398,11 +401,77 @@ impl Mpeg1Video {
         self.runtime_.mb_row = self.runtime_.macroblock_address / self.info_.mb_width as i32;
         self.runtime_.mb_col = self.runtime_.macroblock_address % self.info_.mb_width as i32;
 
+        if self.runtime_.mb_col >= self.info_.mb_width as i32
+           || self.runtime_.mb_row >= self.info_.mb_height as i32 {
+            panic!("macroblock skip out of picture size");
+            return; // corrupt stream;
+        }
+
+        // Process the current macroblock
+        if self.runtime_.picture_type == Mpeg1Video::PICTURE_TYPE_I {
+            self.runtime_.macroblock_type = self.buffer_.read_vlc(&vlc::MP1V_MACROBLOCK_TYPE_INTRA) as i32;
+        } else if self.runtime_.picture_type == Mpeg1Video::PICTURE_TYPE_P {
+            self.runtime_.macroblock_type = self.buffer_.read_vlc(&vlc::MP1V_MACROBLOCK_TYPE_PREDICTIVE) as i32;
+        } else {
+            panic!("Dont' support B/D picture type");
+        }
+
+        self.runtime_.macroblock_intra = (self.runtime_.macroblock_type & 0x01);
+        self.runtime_.macroblock_pattern = (self.runtime_.macroblock_type & 0x02);
+        self.runtime_.motion_forward.is_set = (self.runtime_.macroblock_type & 0x08);
+
+        // Quantizer scale
+        if ((self.runtime_.macroblock_type & 0x10) != 0) {
+            self.runtime_.quantizer_scale = self.buffer_.read(5);
+        }
+
+        if (self->macroblock_intra) {
+            // Intra-coded macroblocks reset motion vectors
+            self.runtime_.motion_forward.h = 0;
+            self.runtime_.motion_forward.v = 0;
+
+        } else {
+            // Non-intra macroblocks reset DC predictors
+            self.runtime_.dc_predictor_0 = 128;
+            self.runtime_.dc_predictor_1 = 128;
+            self.runtime_.dc_predictor_2 = 128;
+
+            plm_video_decode_motion_vectors(self);
+            plm_video_predict_macroblock(self);
+        }
+
+        // Decode blocks
+        let cbp:u32 =
+            if self.runtime_.macroblock_pattern != 0 {
+                self.buffer_.read_vlc(&vlc::CODE_BLOCK_PATTERN) as u32
+            } else {
+                if self.runtime_.macroblock_intra != 0x00 {
+                    0x3f
+                } else {
+                    0x00
+                }
+            };
+
+        for (int block = 0, mask = 0x20; block < 6; block++) {
+            if ((cbp & mask) != 0) {
+                plm_video_decode_block(self, block);
+            }
+            mask >>= 1;
+        }
 
     }
 
     fn predict_macroblock(&mut self) {
-        //TODO
+
     }
+
+    fn decode_motion_vectors(&mut self) {
+
+    }
+
+    fn predict_macroblock(&mut self) {
+
+    }
+
 }
 
