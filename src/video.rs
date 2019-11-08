@@ -94,6 +94,9 @@ pub struct VideoMotion {
 
 #[derive(Default)]
 pub struct VideoRuntime {
+    pub frame_current:     i32,
+    pub frame_forward:     i32,
+
     pub quantizer_scale:   u32,
     pub picture_type:      u32,
 
@@ -103,16 +106,36 @@ pub struct VideoRuntime {
 
     pub motion_forward:    VideoMotion,
 
-    pub mb_row : i32,
-    pub mb_col : i32,
+    pub mb_row : u32,
+    pub mb_col : u32,
     pub macroblock_pattern:  i32,
     pub macroblock_intra:   i32,
     pub macroblock_type:    i32,
     pub macroblock_address: i32,
 }
 
+#[derive(Default)]
+pub struct VideoPlane {
+    pub base: usize,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Default)]
+pub struct VideoFrame {
+    pub time: f64,
+    pub width: u32,
+    pub height: u32,
+    pub y:      VideoPlane,
+    pub cb:     VideoPlane,
+    pub cr:     VideoPlane,
+}
+
 pub struct Mpeg1Video {
-    buffer_:    bitbuf::RingBitBuffer,
+    buffer_:      bitbuf::RingBitBuffer,
+
+    frame_base_:  Box<[u8]>,
+    frames_:      Vec<VideoFrame>,
 
     info_:      CodecInfo,
     qmatrix_:   QuantMatrix,
@@ -130,6 +153,9 @@ impl Mpeg1Video {
     const PICTURE_TYPE_I: u32 = 0x01;
     const PICTURE_TYPE_P: u32 = 0x02;
 
+    const MAX_PICTURE_WIDTH: usize = 1920;
+    const MAX_PICTURE_HEIGHT: usize = 1080;
+
     pub fn new() -> Self {
         let mut info:    CodecInfo = Default::default();
         info._parsed_ = false;
@@ -137,14 +163,25 @@ impl Mpeg1Video {
         let intra_quant_matrix:[u8; 64] = [0; 64];
         let non_intra_quant_matrix:[u8; 64] = [0; 64];
         let qm = QuantMatrix{ intra_quant_matrix, non_intra_quant_matrix};
+
         let runtime: VideoRuntime = Default::default();
 
         let buffer = bitbuf::RingBitBuffer::new();
+        let mut fbase: Vec<u8> = Vec::new();
+        let fbase_size = Mpeg1Video::MAX_PICTURE_WIDTH * Mpeg1Video::MAX_PICTURE_HEIGHT * 6;
+        fbase.resize(fbase_size , 0);
+        fbase.reserve_exact(0);
+
+        let frame_current: VideoFrame = Default::default();
+        let frame_forward: VideoFrame = Default::default();
+
         Mpeg1Video {
-            info_:      info,
-            qmatrix_:   qm,
-            runtime_:   runtime,
-            buffer_:    buffer,
+            info_:          info,
+            qmatrix_:       qm,
+            runtime_:       runtime,
+            buffer_:        buffer,
+            frame_base_:    fbase.into_boxed_slice(),
+            frames_:        vec![frame_current, frame_forward],
         }
     }
 
@@ -214,26 +251,42 @@ impl Mpeg1Video {
         self.info_.luma_height = self.info_.mb_height << 4;
         self.info_.chroma_width = self.info_.mb_width << 3;
         self.info_.chroma_height = self.info_.mb_height << 3;
-
-        // TODO: init framebuffer
-        /*
-        // Allocate one big chunk of data for all 3 frames = 9 planes
-        size_t luma_plane_size = self->luma_width * self->luma_height;
-        size_t chroma_plane_size = self->chroma_width * self->chroma_height;
-        size_t frame_data_size = (luma_plane_size + 2 * chroma_plane_size);
-
-        self->frames_data = (uint8_t*)malloc(frame_data_size * 3);
-        plm_video_init_frame(self, &self->frame_current, self->frames_data + frame_data_size * 0);
-        plm_video_init_frame(self, &self->frame_forward, self->frames_data + frame_data_size * 1);
-        plm_video_init_frame(self, &self->frame_backward, self->frames_data + frame_data_size * 2);
-        */
-
         self.info_._parsed_ = true;
+
+        self.init_frames();
+        self.runtime_.frame_current = 0;
+        self.runtime_.frame_forward = 0;
+    }
+
+    fn init_frames(&mut self) {
+        // Allocate one big chunk of data for all 3 frames = 9 planes
+        let luma_plane_size: u32 = self.info_.luma_width * self.info_.luma_height;
+        let chroma_plane_size: u32 = self.info_.chroma_width * self.info_.chroma_height;
+        let frame_data_size: u32 = luma_plane_size + 2 * chroma_plane_size;
+
+        for i in  0..self.frames_.len() {
+            let frame = &mut self.frames_[i];
+            let base = i * frame_data_size as usize;
+
+            frame.width = self.info_.pic_width;
+            frame.height = self.info_.pic_height;
+
+            frame.y.width = self.info_.luma_width;
+            frame.y.height = self.info_.luma_height;
+            frame.y.base = base + 0;
+
+            frame.cr.width = self.info_.chroma_width;
+            frame.cr.height = self.info_.chroma_height;
+            frame.cr.base = base + luma_plane_size as usize;
+
+            frame.cb.width = self.info_.chroma_width;
+            frame.cb.height = self.info_.chroma_height;
+            frame.cb.base = base + luma_plane_size as usize + chroma_plane_size as usize;
+        }
     }
 
     fn decode_picture(&mut self) -> DecodeResult {
         if self.buffer_.find_start_code(Mpeg1Video::PICTURE_START_CODE) == false {
-            panic!("##########");
             return DecodeResult::InternalError;
         }
 
@@ -244,7 +297,6 @@ impl Mpeg1Video {
 
         if self.runtime_.picture_type != Mpeg1Video::PICTURE_TYPE_I &&
             self.runtime_.picture_type != Mpeg1Video::PICTURE_TYPE_P {
-            panic!("##########");
             return DecodeResult::InternalError;
         }
 
@@ -254,7 +306,6 @@ impl Mpeg1Video {
 
             let f_code: i32 = self.buffer_.read(3) as i32;
             if f_code == 0x00 {
-                panic!("##########");
                 return DecodeResult::InternalError;
             }
 
@@ -273,21 +324,8 @@ impl Mpeg1Video {
             if code == Mpeg1Video::SLICE_START {
                 break;
             }
-            panic!("#### EXIT FOR DEBUG ###");
             return DecodeResult::InternalError;
         }
-
-        // TODO
-        /*
-        plm_frame_t frame_temp = self->frame_forward;
-
-        if (
-            self->picture_type == PLM_VIDEO_PICTURE_TYPE_INTRA ||
-            self->picture_type == PLM_VIDEO_PICTURE_TYPE_PREDICTIVE
-        ) {
-            self->frame_forward = self->frame_backward;
-        }
-        */
 
         let mut next_code = Mpeg1Video::SLICE_START;
         while next_code >= Mpeg1Video::SLICE_START && next_code <= Mpeg1Video::SLICE_LAST {
@@ -302,17 +340,8 @@ impl Mpeg1Video {
 
         self.buffer_.back(32);
 
-        // TODO
-        /*
-        plm_frame_t frame_temp = self->frame_forward;
-
-        if (
-            self->picture_type == PLM_VIDEO_PICTURE_TYPE_INTRA ||
-            self->picture_type == PLM_VIDEO_PICTURE_TYPE_PREDICTIVE
-        ) {
-            self->frame_forward = self->frame_backward;
-        }
-        */
+        self.runtime_.frame_forward = self.runtime_.frame_current;
+        self.runtime_.frame_current = 1 - self.runtime_.frame_current;
 
         return DecodeResult::GotOneFrame;
     }
@@ -368,7 +397,6 @@ impl Mpeg1Video {
             self.runtime_.macroblock_address += increment as i32;
         } else {
             if self.runtime_.macroblock_address + increment as i32 >= self.info_.mb_size as i32 {
-                panic!("macroblock skip out of picture size");
                 return; // invalid
             }
 
@@ -388,8 +416,8 @@ impl Mpeg1Video {
             // Predict skipped macroblocks
             while increment > 1 {
                 self.runtime_.macroblock_address += 1;
-                self.runtime_.mb_row = self.runtime_.macroblock_address / self.info_.mb_width as i32;
-                self.runtime_.mb_col = self.runtime_.macroblock_address % self.info_.mb_width as i32;
+                self.runtime_.mb_row = self.runtime_.macroblock_address as u32 / self.info_.mb_width;
+                self.runtime_.mb_col = self.runtime_.macroblock_address as u32 % self.info_.mb_width;
 
                 self.predict_macroblock();
                 increment -= 1;
@@ -397,12 +425,11 @@ impl Mpeg1Video {
             self.runtime_.macroblock_address += 1;
         }
 
-        self.runtime_.mb_row = self.runtime_.macroblock_address / self.info_.mb_width as i32;
-        self.runtime_.mb_col = self.runtime_.macroblock_address % self.info_.mb_width as i32;
+        self.runtime_.mb_row = self.runtime_.macroblock_address as u32 / self.info_.mb_width;
+        self.runtime_.mb_col = self.runtime_.macroblock_address as u32 % self.info_.mb_width;
 
-        if self.runtime_.mb_col >= self.info_.mb_width as i32
-           || self.runtime_.mb_row >= self.info_.mb_height as i32 {
-            panic!("macroblock skip out of picture size");
+        if self.runtime_.mb_col >= self.info_.mb_width
+           || self.runtime_.mb_row >= self.info_.mb_height {
             return; // corrupt stream;
         }
 
@@ -415,9 +442,9 @@ impl Mpeg1Video {
             panic!("Dont' support B/D picture type");
         }
 
-        self.runtime_.macroblock_intra = (self.runtime_.macroblock_type & 0x01);
-        self.runtime_.macroblock_pattern = (self.runtime_.macroblock_type & 0x02);
-        self.runtime_.motion_forward.is_set = (self.runtime_.macroblock_type & 0x08);
+        self.runtime_.macroblock_intra = self.runtime_.macroblock_type & 0x01;
+        self.runtime_.macroblock_pattern = self.runtime_.macroblock_type & 0x02;
+        self.runtime_.motion_forward.is_set = self.runtime_.macroblock_type & 0x08;
 
         // Quantizer scale
         if (self.runtime_.macroblock_type & 0x10) != 0 {
@@ -453,7 +480,7 @@ impl Mpeg1Video {
 
         let mut mask:u32 = 0x20;
         for block in 0..6 {
-            if ((cbp & mask) != 0) {
+            if (cbp & mask) != 0 {
                 self.decode_block(block as i32);
             }
             mask >>= 1;
@@ -461,11 +488,84 @@ impl Mpeg1Video {
     }
 
     fn predict_macroblock(&mut self) {
+        let mut fw_h = self.runtime_.motion_forward.h;
+        let mut fw_v = self.runtime_.motion_forward.v;
+
+        if self.runtime_.motion_forward.full_px == 1 {
+            fw_h <<= 1;
+            fw_v <<= 1;
+        }
+
+        let dst = &self.frames_[self.runtime_.frame_current as usize];
+        let src = &self.frames_[self.runtime_.frame_forward as usize];
+
+        self.process_macroblock(src.y.base, dst.y.base, fw_h, fw_v, 16);
+        self.process_macroblock(src.cr.base, dst.cr.base, fw_h/2, fw_v/2, 8);
+        self.process_macroblock(src.cb.base, dst.cb.base, fw_h/2, fw_v/2, 8);
+    }
+
+    // copy from source to dest with motion vector
+    fn process_macroblock(&self, src: usize, dst:  usize,
+                          mv_h: i32, mv_v: i32, block_size: u32) {
+
+        let dw = block_size * self.info_.mb_width;
+
+        let hp = mv_h >> 1;
+        let vp = mv_v >> 1;
+        let odd_h = (mv_h & 1) == 1;
+        let odd_v = (mv_v & 1) == 1;
+
+        let di:u32 = (self.runtime_.mb_row * dw + self.runtime_.mb_col) * block_size;
+        let si:i32 = ((self.runtime_.mb_row * block_size) as i32 + vp) * dw as i32 + (self.runtime_.mb_col * block_size) as i32 + hp;
+        let si:u32 = si as u32;
+
+        let max_address = dw * (self.info_.mb_height * block_size - block_size + 1) - block_size;
+        if si > max_address || di > max_address {
+            panic!("motion vector outof picture");
+            return; // corrupt video
+        }
+
+        //TODO
 
     }
 
     fn decode_motion_vectors(&mut self) {
+        // Forward
+        if self.runtime_.motion_forward.is_set == 0x01 {
+            let r_size = self.runtime_.motion_forward.r_size;
+            self.runtime_.motion_forward.h = self.decode_motion_vector(r_size, self.runtime_.motion_forward.h);
+            self.runtime_.motion_forward.v = self.decode_motion_vector(r_size, self.runtime_.motion_forward.v);
+        } else if self.runtime_.picture_type == Mpeg1Video::PICTURE_TYPE_P {
+            // No motion information in P-picture, reset vectors
+            self.runtime_.motion_forward.h = 0;
+            self.runtime_.motion_forward.v = 0;
+        }
+    }
 
+    fn decode_motion_vector(&mut self, r_size:i32, mut motion: i32) -> i32 {
+        let fscale = 1 << r_size;
+        let m_code = self.buffer_.read_vlc(&vlc::MP1V_VIDEO_MOTION) as i32;
+        let mut r:i32 = 0;
+        let mut d:i32 = 0;
+
+        if (m_code != 0) && (fscale != 1) {
+            r = self.buffer_.read(r_size as usize) as i32;
+            d = ((m_code.abs() - 1) << r_size) + r + 1;
+            if m_code < 0 {
+                d = -d;
+            }
+        }
+        else {
+            d = m_code;
+        }
+
+        motion += d;
+        if motion >(fscale << 4) - 1 {
+            motion -= fscale << 5;
+        } else if motion < ((-fscale) << 4) {
+            motion += fscale << 5;
+        }
+        return motion;
     }
 
     fn decode_block(&mut self, blk: i32) {
