@@ -114,6 +114,17 @@ impl RingBitBuffer {
         return state.1
     }
 
+    pub fn read_vlc_u16(&mut self, vlc_table: &[(i16, u16)]) -> u16 {
+        let mut state: &(i16, u16) = &(0, 0);
+        loop {
+            state = &vlc_table[state.0 as usize + self.read(1) as usize];
+            if state.0 <= 0 {
+                break;
+            }
+        }
+        return state.1
+    }
+
     pub fn next_is_start(&mut self) -> bool {
         let oldbi = self.rbi_;
 

@@ -8,7 +8,7 @@ static MP1V_FRAME_RATE: [f32; 16] = [
     60.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000
 ];
 
-static MP1V_ZIG_ZAG: [u8; 64] = [
+const MP1V_ZIG_ZAG: [i32; 64] = [
      0,  1,  8, 16,  9,  2,  3, 10,
     17, 24, 32, 25, 18, 11,  4,  5,
     12, 19, 26, 33, 40, 48, 41, 34,
@@ -134,7 +134,7 @@ pub struct Mpeg1Video {
 
     frame_base_:  Box<[u8]>,
     frames_:      Vec<VideoFrame>,
-    block_data_:  [u8; 64],
+    block_data_:  [i32; 64],
 
     info_:      CodecInfo,
     qmatrix_:   QuantMatrix,
@@ -548,8 +548,8 @@ impl Mpeg1Video {
     fn decode_motion_vector(&mut self, r_size:i32, mut motion: i32) -> i32 {
         let fscale = 1 << r_size;
         let m_code = self.buffer_.read_vlc(&vlc::MP1V_VIDEO_MOTION) as i32;
-        let mut r:i32 = 0;
-        let mut d:i32 = 0;
+        let r:i32;
+        let mut d:i32;
 
         if (m_code != 0) && (fscale != 1) {
             r = self.buffer_.read(r_size as usize) as i32;
@@ -572,13 +572,11 @@ impl Mpeg1Video {
     }
 
     fn decode_block(&mut self, block: i32) {
-        let mut n:i32;
+        let mut n:i32 = 0;
+        let quant_matrix: &[u8];
 
         // Decode DC coefficient of intra-coded blocks
         if self.runtime_.macroblock_intra != 0 {
-            let mut predictor:i32;
-            let mut dct_size:i32;
-
             // DC prediction
             let plane_index = if block > 3 {
                 block - 3
@@ -587,33 +585,92 @@ impl Mpeg1Video {
             };
 
             let dct_size = self.buffer_.read_vlc(Mpeg1Video::DCT_SIZE_TABLE[plane_index as usize]);
-            predictor = self.runtime_.dc_predictor[plane_index as usize];
+            let predictor = self.runtime_.dc_predictor[plane_index as usize];
 
-            /*
             // Read DC coeff
-            if (dct_size > 0) {
-                int differential = plm_buffer_read(self->buffer, dct_size);
-                if ((differential & (1 << (dct_size - 1))) != 0) {
-                    self->block_data[0] = predictor + differential;
+            if dct_size > 0 {
+                let differential:i32  = self.buffer_.read(dct_size as usize) as i32;
+
+                if (differential & (1 << (dct_size - 1))) != 0 {
+                    self.block_data_[0] = predictor + differential;
                 }
                 else {
-                    self->block_data[0] = predictor + ((-1 << dct_size) | (differential + 1));
+                    self.block_data_[0] = predictor + ((-1 << dct_size) | (differential + 1));
                 }
-            }
-            else {
-                self->block_data[0] = predictor;
+            } else {
+                self.block_data_[0] = predictor;
             }
 
             // Save predictor value
-            self->dc_predictor[plane_index] = self->block_data[0];
+            self.runtime_.dc_predictor[plane_index as usize] = self.block_data_[0];
 
             // Dequantize + premultiply
-            self->block_data[0] <<= (3 + 5);
+            self.block_data_[0] <<= 3 + 5;
 
-            quant_matrix = self->intra_quant_matrix;
+            quant_matrix = &self.qmatrix_.intra_quant_matrix;
             n = 1;
-            */
+        } else {
+            quant_matrix = &self.qmatrix_.non_intra_quant_matrix;
         }
+
+        // Decode AC coefficients (+DC for non-intra)
+        let mut level:i32 = 0;
+        loop {
+            let run:i32;
+            let coeff:u16 = self.buffer_.read_vlc_u16(&vlc::MP1V_DCT_COEFF);
+
+            if (coeff == 0x0001) && (n > 0) && (self.buffer_.read(1) == 0) {
+                // end_of_block
+                break;
+            }
+
+            if coeff == 0xffff {
+                // escape
+                run = self.buffer_.read(6) as i32;
+                level = self.buffer_.read(8) as i32;
+                if level == 0 {
+                    level = self.buffer_.read(8) as i32;
+                } else if level == 128 {
+                    level = self.buffer_.read(8) as i32 - 256;
+                } else if level > 128 {
+                    level = level - 256;
+                }
+            } else {
+                run = (coeff >> 8) as i32;
+                level = (coeff & 0xff) as i32;
+                if self.buffer_.read(1) != 0 {
+                    level = -level;
+                }
+            }
+
+            n += run;
+            if n < 0 || n >= 64 {
+                return; // invalid
+            }
+
+            let de_zig_zagged = MP1V_ZIG_ZAG[n as usize];
+            n+=1;
+
+            // Dequantize, oddify, clip
+            level <<= 1;
+            if (self.runtime_.macroblock_intra == 0) {
+                level += if level < 0 { -1 } else { 1};
+            }
+            level = (level * self.runtime_.quantizer_scale as i32 * quant_matrix[de_zig_zagged as usize] as i32) >> 4;
+            if (level & 1) == 0 {
+                level -= if level > 0 { 1 } else { -1 };
+            }
+            if level > 2047 {
+                level = 2047;
+            } else if level < -2048 {
+                level = -2048;
+            }
+
+            // Save premultiplied coefficient
+            self.block_data_[de_zig_zagged as usize] = level * MP1V_PREMULTIPLIER_MATRIX[de_zig_zagged as usize] as i32;
+        }
+
+
     }
 }
 
