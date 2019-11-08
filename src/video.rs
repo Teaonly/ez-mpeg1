@@ -100,9 +100,7 @@ pub struct VideoRuntime {
     pub quantizer_scale:   u32,
     pub picture_type:      u32,
 
-    pub dc_predictor_0:    i32,
-    pub dc_predictor_1:    i32,
-    pub dc_predictor_2:    i32,
+    pub dc_predictor:      [i32;3],
 
     pub motion_forward:    VideoMotion,
 
@@ -136,6 +134,7 @@ pub struct Mpeg1Video {
 
     frame_base_:  Box<[u8]>,
     frames_:      Vec<VideoFrame>,
+    block_data_:  [u8; 64],
 
     info_:      CodecInfo,
     qmatrix_:   QuantMatrix,
@@ -155,6 +154,10 @@ impl Mpeg1Video {
 
     const MAX_PICTURE_WIDTH: usize = 1920;
     const MAX_PICTURE_HEIGHT: usize = 1080;
+
+    const DCT_SIZE_TABLE: [&'static [(i16, i16)];3]  = [&vlc::MP1V_DCT_SIZE_LUMINANCE,
+                                                &vlc::MP1V_DCT_SIZE_CHROMINANCE,
+                                                &vlc::MP1V_DCT_SIZE_CHROMINANCE];
 
     pub fn new() -> Self {
         let mut info:    CodecInfo = Default::default();
@@ -182,6 +185,7 @@ impl Mpeg1Video {
             buffer_:        buffer,
             frame_base_:    fbase.into_boxed_slice(),
             frames_:        vec![frame_current, frame_forward],
+            block_data_:    [0; 64]
         }
     }
 
@@ -352,9 +356,9 @@ impl Mpeg1Video {
         // Reset motion vectors and DC predictors
         self.runtime_.motion_forward.h = 0;
         self.runtime_.motion_forward.v = 0;
-        self.runtime_.dc_predictor_0 = 128;
-        self.runtime_.dc_predictor_1 = 128;
-        self.runtime_.dc_predictor_2 = 128;
+        self.runtime_.dc_predictor[0] = 128;
+        self.runtime_.dc_predictor[1] = 128;
+        self.runtime_.dc_predictor[2] = 128;
 
         // quantizer scale
         self.runtime_.quantizer_scale = self.buffer_.read(5);
@@ -402,9 +406,9 @@ impl Mpeg1Video {
 
             if increment > 1 {
                 // Skipped macroblocks reset DC predictors
-                self.runtime_.dc_predictor_0 = 128;
-                self.runtime_.dc_predictor_1 = 128;
-                self.runtime_.dc_predictor_2 = 128;
+                self.runtime_.dc_predictor[0] = 128;
+                self.runtime_.dc_predictor[1] = 128;
+                self.runtime_.dc_predictor[2] = 128;
 
                 // Skipped macroblocks in P-pictures reset motion vectors
                 if self.runtime_.picture_type == Mpeg1Video::PICTURE_TYPE_P {
@@ -458,9 +462,9 @@ impl Mpeg1Video {
 
         } else {
             // Non-intra macroblocks reset DC predictors
-            self.runtime_.dc_predictor_0 = 128;
-            self.runtime_.dc_predictor_1 = 128;
-            self.runtime_.dc_predictor_2 = 128;
+            self.runtime_.dc_predictor[0] = 128;
+            self.runtime_.dc_predictor[1] = 128;
+            self.runtime_.dc_predictor[2] = 128;
 
             self.decode_motion_vectors();
             self.predict_macroblock();
@@ -471,7 +475,7 @@ impl Mpeg1Video {
             if self.runtime_.macroblock_pattern != 0 {
                 self.buffer_.read_vlc(&vlc::MP1V_CODE_BLOCK_PATTERN) as u32
             } else {
-                if self.runtime_.macroblock_intra != 0x00 {
+                if self.runtime_.macroblock_intra != 0 {
                     0x3f
                 } else {
                     0x00
@@ -526,7 +530,6 @@ impl Mpeg1Video {
         }
 
         //TODO
-
     }
 
     fn decode_motion_vectors(&mut self) {
@@ -568,8 +571,49 @@ impl Mpeg1Video {
         return motion;
     }
 
-    fn decode_block(&mut self, blk: i32) {
+    fn decode_block(&mut self, block: i32) {
+        let mut n:i32;
 
+        // Decode DC coefficient of intra-coded blocks
+        if self.runtime_.macroblock_intra != 0 {
+            let mut predictor:i32;
+            let mut dct_size:i32;
+
+            // DC prediction
+            let plane_index = if block > 3 {
+                block - 3
+            } else {
+                0
+            };
+
+            let dct_size = self.buffer_.read_vlc(Mpeg1Video::DCT_SIZE_TABLE[plane_index as usize]);
+            predictor = self.runtime_.dc_predictor[plane_index as usize];
+
+            /*
+            // Read DC coeff
+            if (dct_size > 0) {
+                int differential = plm_buffer_read(self->buffer, dct_size);
+                if ((differential & (1 << (dct_size - 1))) != 0) {
+                    self->block_data[0] = predictor + differential;
+                }
+                else {
+                    self->block_data[0] = predictor + ((-1 << dct_size) | (differential + 1));
+                }
+            }
+            else {
+                self->block_data[0] = predictor;
+            }
+
+            // Save predictor value
+            self->dc_predictor[plane_index] = self->block_data[0];
+
+            // Dequantize + premultiply
+            self->block_data[0] <<= (3 + 5);
+
+            quant_matrix = self->intra_quant_matrix;
+            n = 1;
+            */
+        }
     }
 }
 

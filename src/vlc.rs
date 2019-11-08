@@ -1,4 +1,4 @@
-pub static MP1V_MACROBLOCK_ADDRESS_INCREMENT: [(i16, i16); 80] = [
+pub const MP1V_MACROBLOCK_ADDRESS_INCREMENT: [(i16, i16); 80] = [
     (  1 << 1,    0), (       0,    1),  //   0: x
     (  2 << 1,    0), (  3 << 1,    0),  //   1: 0x
     (  4 << 1,    0), (  5 << 1,    0),  //   2: 00x
@@ -41,12 +41,12 @@ pub static MP1V_MACROBLOCK_ADDRESS_INCREMENT: [(i16, i16); 80] = [
     (       0,   23), (       0,   22),  //  39: 0000 0100 01x
 ];
 
-pub static MP1V_MACROBLOCK_TYPE_INTRA: [(i16, i16); 4]  = [
+pub const MP1V_MACROBLOCK_TYPE_INTRA: [(i16, i16); 4]  = [
     (  1 << 1,    0), (       0,  0x01),  //   0: x
     (      -1,    0), (       0,  0x11),  //   1: 0x
 ];
 
-pub static MP1V_MACROBLOCK_TYPE_PREDICTIVE: [(i16, i16); 14]  = [
+pub const MP1V_MACROBLOCK_TYPE_PREDICTIVE: [(i16, i16); 14]  = [
     (  1 << 1,    0), (       0, 0x0a),  //   0: x
     (  2 << 1,    0), (       0, 0x02),  //   1: 0x
     (  3 << 1,    0), (       0, 0x08),  //   2: 00x
@@ -56,7 +56,7 @@ pub static MP1V_MACROBLOCK_TYPE_PREDICTIVE: [(i16, i16); 14]  = [
     (      -1,    0), (       0, 0x11),  //   6: 0000 0x
 ];
 
-pub static MP1V_CODE_BLOCK_PATTERN: [(i16, i16); 126] = [
+pub const MP1V_CODE_BLOCK_PATTERN: [(i16, i16); 126] = [
     (  1 << 1,    0), (  2 << 1,    0),  //   0: x
     (  3 << 1,    0), (  4 << 1,    0),  //   1: 0x
     (  5 << 1,    0), (  6 << 1,    0),  //   2: 1x
@@ -122,7 +122,7 @@ pub static MP1V_CODE_BLOCK_PATTERN: [(i16, i16); 126] = [
 	(       0,   47), (       0,   31),  //  62: 0000 0011x
 ];
 
-pub static MP1V_VIDEO_MOTION: [(i16, i16); 68] = [
+pub const MP1V_VIDEO_MOTION: [(i16, i16); 68] = [
     (  1 << 1,    0), (       0,    0),  //   0: x
     (  2 << 1,    0), (  3 << 1,    0),  //   1: 0x
     (  4 << 1,    0), (  5 << 1,    0),  //   2: 00x
@@ -157,5 +157,29 @@ pub static MP1V_VIDEO_MOTION: [(i16, i16); 68] = [
     (       0,   13), (       0,  -13),  //  31: 0000 0011 11x
     (       0,   12), (       0,  -12),  //  32: 0000 0100 00x
     (       0,   11), (       0,  -11),  //  33: 0000 0100 01x
+];
+
+pub const MP1V_DCT_SIZE_LUMINANCE: [(i16,i16); 18] = [
+    (  1 << 1,    0), (  2 << 1,    0),  //   0: x
+    (       0,    1), (       0,    2),  //   1: 0x
+    (  3 << 1,    0), (  4 << 1,    0),  //   2: 1x
+    (       0,    0), (       0,    3),  //   3: 10x
+    (       0,    4), (  5 << 1,    0),  //   4: 11x
+    (       0,    5), (  6 << 1,    0),  //   5: 111x
+    (       0,    6), (  7 << 1,    0),  //   6: 1111x
+    (       0,    7), (  8 << 1,    0),  //   7: 1111 1x
+    (       0,    8), (      -1,    0),  //   8: 1111 11x
+];
+
+pub const MP1V_DCT_SIZE_CHROMINANCE: [(i16,i16); 18] = [
+    (  1 << 1,    0), (  2 << 1,    0),  //   0: x
+    (       0,    0), (       0,    1),  //   1: 0x
+    (       0,    2), (  3 << 1,    0),  //   2: 1x
+    (       0,    3), (  4 << 1,    0),  //   3: 11x
+    (       0,    4), (  5 << 1,    0),  //   4: 111x
+    (       0,    5), (  6 << 1,    0),  //   5: 1111x
+    (       0,    6), (  7 << 1,    0),  //   6: 1111 1x
+    (       0,    7), (  8 << 1,    0),  //   7: 1111 11x
+    (       0,    8), (      -1,    0),  //   8: 1111 111x
 ];
 
