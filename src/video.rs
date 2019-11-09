@@ -670,7 +670,59 @@ impl Mpeg1Video {
             self.block_data_[de_zig_zagged as usize] = level * MP1V_PREMULTIPLIER_MATRIX[de_zig_zagged as usize] as i32;
         }
 
+        // Move block to its place
+        let d: usize;
+        let dw: u32;
+        let mut di: u32;
 
+        let frame_current = &self.frames_[self.runtime_.frame_current as usize];
+        if block < 4 {
+            d = frame_current.y.base;
+            dw = self.info_.luma_width;
+            di = (self.runtime_.mb_row * self.info_.luma_width + self.runtime_.mb_col) << 4;
+            if (block & 1) != 0 {
+                di += 8;
+            }
+            if (block & 2) != 0 {
+                di += self.info_.luma_width << 3;
+            }
+        }
+        else {
+            d = if block == 4 { frame_current.cb.base } else { frame_current.cr.base};
+            dw = self.info_.chroma_width;
+            di = ((self.runtime_.mb_row * self.info_.luma_width) << 2) + (self.runtime_.mb_col << 3);
+        }
+
+        /*
+        int *s = self->block_data;
+        int si = 0;
+        if (self->macroblock_intra) {
+            // Overwrite (no prediction)
+            if (n == 1) {
+                int clamped = plm_clamp((s[0] + 128) >> 8);
+                PLM_BLOCK_SET(d, di, dw, si, 8, 8, clamped);
+                s[0] = 0;
+            }
+            else {
+                plm_video_idct(s);
+                PLM_BLOCK_SET(d, di, dw, si, 8, 8, plm_clamp(s[si]));
+                memset(self->block_data, 0, sizeof(self->block_data));
+            }
+        }
+        else {
+            // Add data to the predicted macroblock
+            if (n == 1) {
+                int value = (s[0] + 128) >> 8;
+                PLM_BLOCK_SET(d, di, dw, si, 8, 8, plm_clamp(d[di] + value));
+                s[0] = 0;
+            }
+            else {
+                plm_video_idct(s);
+                PLM_BLOCK_SET(d, di, dw, si, 8, 8, plm_clamp(d[di] + s[si]));
+                memset(self->block_data, 0, sizeof(self->block_data));
+            }
+        }
+        */
     }
 }
 
