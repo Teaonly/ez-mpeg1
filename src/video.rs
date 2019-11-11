@@ -508,8 +508,9 @@ impl Mpeg1Video {
         self.process_macroblock(src.cb.base, dst.cb.base, fw_h/2, fw_v/2, 8);
     }
 
+
     // copy from source to dest with motion vector
-    fn process_macroblock(&self, src: usize, dst:  usize,
+    fn process_macroblock(&self, src: usize, dst: usize,
                           mv_h: i32, mv_v: i32, block_size: u32) {
 
         let dw = block_size * self.info_.mb_width;
@@ -519,9 +520,9 @@ impl Mpeg1Video {
         let odd_h = (mv_h & 1) == 1;
         let odd_v = (mv_v & 1) == 1;
 
-        let di:u32 = (self.runtime_.mb_row * dw + self.runtime_.mb_col) * block_size;
+        let mut di:u32 = (self.runtime_.mb_row * dw + self.runtime_.mb_col) * block_size;
         let si:i32 = ((self.runtime_.mb_row * block_size) as i32 + vp) * dw as i32 + (self.runtime_.mb_col * block_size) as i32 + hp;
-        let si:u32 = si as u32;
+        let mut si:u32 = si as u32;
 
         let max_address = dw * (self.info_.mb_height * block_size - block_size + 1) - block_size;
         if si > max_address || di > max_address {
@@ -529,7 +530,18 @@ impl Mpeg1Video {
             return; // corrupt video
         }
 
-        //TODO
+        let dest_scan = dw - block_size;
+        let source_scan = dw - block_size;
+        for _y in 0..block_size {
+            for _x in 0..block_size {
+                //DEST[DEST_INDEX] = OP;
+                // TODO
+                di+=1;
+                si+=1;
+            }
+            di += dest_scan;
+            si += source_scan;
+        }
     }
 
     fn decode_motion_vectors(&mut self) {
@@ -614,7 +626,7 @@ impl Mpeg1Video {
         }
 
         // Decode AC coefficients (+DC for non-intra)
-        let mut level:i32 = 0;
+        let mut level:i32;
         loop {
             let run:i32;
             let coeff:u16 = self.buffer_.read_vlc_u16(&vlc::MP1V_DCT_COEFF);
@@ -653,7 +665,7 @@ impl Mpeg1Video {
 
             // Dequantize, oddify, clip
             level <<= 1;
-            if (self.runtime_.macroblock_intra == 0) {
+            if self.runtime_.macroblock_intra == 0 {
                 level += if level < 0 { -1 } else { 1};
             }
             level = (level * self.runtime_.quantizer_scale as i32 * quant_matrix[de_zig_zagged as usize] as i32) >> 4;
@@ -693,14 +705,14 @@ impl Mpeg1Video {
             di = ((self.runtime_.mb_row * self.info_.luma_width) << 2) + (self.runtime_.mb_col << 3);
         }
 
-        let plm_clamp = |x:i32| -> i32 {
-            if n > 255 {
+        let plm_clamp = |x:i32| -> u8 {
+            if x > 255 {
                 return 255;
             }
-            if n < 0 {
+            if x < 0 {
                 return 0;
             }
-            return n;
+            return x as u8;
         };
 
         let zero_block = |x: &mut [i32]| {
@@ -713,26 +725,59 @@ impl Mpeg1Video {
             // Overwrite (no prediction)
             if n == 1 {
                 let clamped  = plm_clamp((self.block_data_[0] + 128) >> 8);
-                // TODO
-                //PLM_BLOCK_SET(d, di, dw, 0, 8, 8, clamped);
+                {
+                    for _y in 0..8 {
+                        for _x in 0..8 {
+                            self.frame_base_[d + di as usize] = clamped;
+                            di+=1;
+                        }
+                        di += dw - 8;
+                    }
+                }
                 self.block_data_[0] = 0;
             }
             else {
                 self.idct();
-                //PLM_BLOCK_SET(d, di, dw, si, 8, 8, plm_clamp(s[si]));
+                let mut si:usize = 0;
+                {
+                    for _y in 0..8 {
+                        for _x in 0..8 {
+                            self.frame_base_[d + di as usize] = plm_clamp(self.block_data_[si]);
+                            di += 1;
+                            si += 1;
+                        }
+                        di += dw - 8;
+                    }
+                }
                 zero_block(&mut self.block_data_);
             }
         }
         else {
             // Add data to the predicted macroblock
-            if (n == 1) {
+            if n == 1 {
                 let value = (self.block_data_[0] + 128) >> 8;
-                //PLM_BLOCK_SET(d, di, dw, si, 8, 8, plm_clamp(d[di] + value));
+                {
+                    for _y in 0..8 {
+                        for _x in 0..8 {
+                            self.frame_base_[d + di as usize] = plm_clamp(self.frame_base_[d + di as usize] as i32 + value);
+                            di+=1;
+                        }
+                        di += dw - 8;
+                    }
+                }
                 self.block_data_[0] = 0;
             }
             else {
                 self.idct();
-                //PLM_BLOCK_SET(d, di, dw, si, 8, 8, plm_clamp(d[di] + s[si]));
+                let mut si:usize = 0;
+                for _y in 0..8 {
+                    for _x in 0..8 {
+                        self.frame_base_[d + di as usize] = plm_clamp(self.frame_base_[d + di as usize] as i32 + self.block_data_[si]);
+                        di += 1;
+                        si += 1;
+                    }
+                    di += dw - 8;
+                }
                 zero_block(&mut self.block_data_);
             }
         }
