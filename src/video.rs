@@ -83,7 +83,7 @@ struct QuantMatrix {
     pub non_intra_quant_matrix: [u8;64],
 }
 
-#[derive(Default, Clone)]
+#[derive(Default)]
 pub struct VideoMotion {
     pub full_px: i32,
     pub is_set: i32,
@@ -500,17 +500,21 @@ impl Mpeg1Video {
             fw_v <<= 1;
         }
 
-        let dst = &self.frames_[self.runtime_.frame_current as usize];
-        let src = &self.frames_[self.runtime_.frame_forward as usize];
+        let src = self.frames_[self.runtime_.frame_forward as usize].y.base;
+        let dst = self.frames_[self.runtime_.frame_current as usize].y.base;
+        self.process_macroblock(src, dst, fw_h, fw_v, 16);
 
-        self.process_macroblock(src.y.base, dst.y.base, fw_h, fw_v, 16);
-        self.process_macroblock(src.cr.base, dst.cr.base, fw_h/2, fw_v/2, 8);
-        self.process_macroblock(src.cb.base, dst.cb.base, fw_h/2, fw_v/2, 8);
+        let src = self.frames_[self.runtime_.frame_forward as usize].cb.base;
+        let dst = self.frames_[self.runtime_.frame_current as usize].cb.base;
+        self.process_macroblock(src, dst, fw_h/2, fw_v/2, 8);
+
+        let src = self.frames_[self.runtime_.frame_forward as usize].cr.base;
+        let dst = self.frames_[self.runtime_.frame_current as usize].cr.base;
+        self.process_macroblock(src, dst, fw_h/2, fw_v/2, 8);
     }
 
-
     // copy from source to dest with motion vector
-    fn process_macroblock(&self, src: usize, dst: usize,
+    fn process_macroblock(&mut self, src: usize, dst: usize,
                           mv_h: i32, mv_v: i32, block_size: u32) {
 
         let dw = block_size * self.info_.mb_width;
@@ -520,22 +524,42 @@ impl Mpeg1Video {
         let odd_h = (mv_h & 1) == 1;
         let odd_v = (mv_v & 1) == 1;
 
-        let mut di:u32 = (self.runtime_.mb_row * dw + self.runtime_.mb_col) * block_size;
+        let di:u32 = (self.runtime_.mb_row * dw + self.runtime_.mb_col) * block_size;
         let si:i32 = ((self.runtime_.mb_row * block_size) as i32 + vp) * dw as i32 + (self.runtime_.mb_col * block_size) as i32 + hp;
-        let mut si:u32 = si as u32;
+
+        let mut di:usize = di as usize;
+        let mut si:usize = si as usize;
 
         let max_address = dw * (self.info_.mb_height * block_size - block_size + 1) - block_size;
+        let max_address = max_address as usize;
         if si > max_address || di > max_address {
             panic!("motion vector outof picture");
             return; // corrupt video
         }
 
-        let dest_scan = dw - block_size;
-        let source_scan = dw - block_size;
+        let dest_scan = (dw - block_size) as usize;
+        let source_scan = (dw - block_size) as usize;
         for _y in 0..block_size {
             for _x in 0..block_size {
-                //DEST[DEST_INDEX] = OP;
-                // TODO
+
+                let pixel:u32 = match (odd_h, odd_v) {
+                        (false, false) => {
+                            self.frame_base_[src + si] as u32
+                        },
+                        (false, true) => {
+                            (self.frame_base_[src + si] as u32 + self.frame_base_[src + si + dw as usize] as u32 + 1) >> 1
+                        },
+                        (true, false) => {
+                            (self.frame_base_[src + si] as u32 + self.frame_base_[src + si + 1] as u32 + 1) >> 1
+                        },
+                        (true, true) => {
+                            (self.frame_base_[src + si] as u32 + self.frame_base_[src + si + 1] as u32 +
+                             self.frame_base_[src + si + dw as usize] as u32 + self.frame_base_[src + si + dw as usize + 1] as u32 + 2) >> 2
+                        },
+                    };
+
+                self.frame_base_[dst + di] = pixel as u8;
+
                 di+=1;
                 si+=1;
             }
