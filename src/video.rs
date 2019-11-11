@@ -693,36 +693,53 @@ impl Mpeg1Video {
             di = ((self.runtime_.mb_row * self.info_.luma_width) << 2) + (self.runtime_.mb_col << 3);
         }
 
-        /*
-        int *s = self->block_data;
-        int si = 0;
-        if (self->macroblock_intra) {
+        let plm_clamp = |x:i32| -> i32 {
+            if n > 255 {
+                return 255;
+            }
+            if n < 0 {
+                return 0;
+            }
+            return n;
+        };
+
+        let zero_block = |x: &mut [i32]| {
+            for i in 0..x.len() {
+                x[i] = 0;
+            }
+        };
+
+        if self.runtime_.macroblock_intra != 0 {
             // Overwrite (no prediction)
-            if (n == 1) {
-                int clamped = plm_clamp((s[0] + 128) >> 8);
-                PLM_BLOCK_SET(d, di, dw, si, 8, 8, clamped);
-                s[0] = 0;
+            if n == 1 {
+                let clamped  = plm_clamp((self.block_data_[0] + 128) >> 8);
+                // TODO
+                //PLM_BLOCK_SET(d, di, dw, 0, 8, 8, clamped);
+                self.block_data_[0] = 0;
             }
             else {
-                plm_video_idct(s);
-                PLM_BLOCK_SET(d, di, dw, si, 8, 8, plm_clamp(s[si]));
-                memset(self->block_data, 0, sizeof(self->block_data));
+                self.idct();
+                //PLM_BLOCK_SET(d, di, dw, si, 8, 8, plm_clamp(s[si]));
+                zero_block(&mut self.block_data_);
             }
         }
         else {
             // Add data to the predicted macroblock
             if (n == 1) {
-                int value = (s[0] + 128) >> 8;
-                PLM_BLOCK_SET(d, di, dw, si, 8, 8, plm_clamp(d[di] + value));
-                s[0] = 0;
+                let value = (self.block_data_[0] + 128) >> 8;
+                //PLM_BLOCK_SET(d, di, dw, si, 8, 8, plm_clamp(d[di] + value));
+                self.block_data_[0] = 0;
             }
             else {
-                plm_video_idct(s);
-                PLM_BLOCK_SET(d, di, dw, si, 8, 8, plm_clamp(d[di] + s[si]));
-                memset(self->block_data, 0, sizeof(self->block_data));
+                self.idct();
+                //PLM_BLOCK_SET(d, di, dw, si, 8, 8, plm_clamp(d[di] + s[si]));
+                zero_block(&mut self.block_data_);
             }
         }
-        */
+    }
+
+    fn idct(&mut self) {
+        // TODO
     }
 }
 
