@@ -763,7 +763,6 @@ impl Mpeg1Video {
         if self.runtime_.macroblock_intra != 0 {
             // Overwrite (no prediction)
             if n == 1 {
-                /*
                 let clamped  = plm_clamp((self.block_data_[0] + 128) >> 8);
                 {
                     for _y in 0..8 {
@@ -774,11 +773,9 @@ impl Mpeg1Video {
                         di += dw - 8;
                     }
                 }
-                */
                 self.block_data_[0] = 0;
             }
             else {
-                /*
                 self.idct();
                 let mut si:usize = 0;
                 {
@@ -791,14 +788,12 @@ impl Mpeg1Video {
                         di += dw - 8;
                     }
                 }
-                */
                 zero_block(&mut self.block_data_);
             }
         }
         else {
             // Add data to the predicted macroblock
             if n == 1 {
-                /*
                 let value = (self.block_data_[0] + 128) >> 8;
                 {
                     for _y in 0..8 {
@@ -809,11 +804,9 @@ impl Mpeg1Video {
                         di += dw - 8;
                     }
                 }
-                */
                 self.block_data_[0] = 0;
             }
             else {
-                /*
                 self.idct();
                 let mut si:usize = 0;
                 for _y in 0..8 {
@@ -824,7 +817,6 @@ impl Mpeg1Video {
                     }
                     di += dw - 8;
                 }
-                */
                 zero_block(&mut self.block_data_);
             }
         }
