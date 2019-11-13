@@ -104,9 +104,9 @@ impl RingBitBuffer {
     }
 
     pub fn read_vlc(&mut self, vlc_table: &[(i16, i16)]) -> i16 {
-        let mut state: &(i16, i16) = &(0, 0);
+        let mut state: (i16, i16) = (0, 0);
         loop {
-            state = &vlc_table[state.0 as usize + self.read(1) as usize];
+            state = vlc_table[(state.0 + self.read(1) as i16) as usize];
             if state.0 <= 0 {
                 break;
             }
@@ -115,9 +115,9 @@ impl RingBitBuffer {
     }
 
     pub fn read_vlc_u16(&mut self, vlc_table: &[(i16, u16)]) -> u16 {
-        let mut state: &(i16, u16) = &(0, 0);
+        let mut state: (i16, u16) = (0, 0);
         loop {
-            state = &vlc_table[state.0 as usize + self.read(1) as usize];
+            state = vlc_table[state.0 as usize + self.read(1) as usize];
             if state.0 <= 0 {
                 break;
             }

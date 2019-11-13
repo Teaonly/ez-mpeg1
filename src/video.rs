@@ -370,8 +370,6 @@ impl Mpeg1Video {
             self.buffer_.read(8);
         }
 
-        println!(">>>>>>>>>>>>>>>{}", slice_code);
-
         let mut slice_begin = true;
         loop {
             self.decode_macroblock(slice_begin);
@@ -386,7 +384,7 @@ impl Mpeg1Video {
 
     fn decode_macroblock(&mut self, slice_begin:bool) {
         // Decode self->macroblock_address_increment
-        let mut increment:i16 = 0;
+        let mut increment:i32 = 0;
 
         let mut t = self.buffer_.read_vlc(&vlc::MP1V_MACROBLOCK_ADDRESS_INCREMENT);
         while t == 34 {
@@ -397,7 +395,8 @@ impl Mpeg1Video {
             increment += 33;
             t = self.buffer_.read_vlc(&vlc::MP1V_MACROBLOCK_ADDRESS_INCREMENT);
         }
-        increment += t;
+        increment += t as i32;
+
 
         if slice_begin {
             // The first self->macroblock_address_increment of each slice is relative
@@ -434,6 +433,8 @@ impl Mpeg1Video {
             self.runtime_.macroblock_address += 1;
         }
 
+
+
         self.runtime_.mb_row = self.runtime_.macroblock_address as u32 / self.info_.mb_width;
         self.runtime_.mb_col = self.runtime_.macroblock_address as u32 % self.info_.mb_width;
 
@@ -455,6 +456,9 @@ impl Mpeg1Video {
         self.runtime_.macroblock_intra = self.runtime_.macroblock_type & 0x01;
         self.runtime_.macroblock_pattern = self.runtime_.macroblock_type & 0x02;
         self.runtime_.motion_forward.is_set = self.runtime_.macroblock_type & 0x08;
+
+
+
 
         // Quantizer scale
         if (self.runtime_.macroblock_type & 0x10) != 0 {
@@ -486,6 +490,7 @@ impl Mpeg1Video {
                     0x00
                 }
             };
+
 
         let mut mask:u32 = 0x20;
         for block in 0..6 {
@@ -575,7 +580,7 @@ impl Mpeg1Video {
 
     fn decode_motion_vectors(&mut self) {
         // Forward
-        if self.runtime_.motion_forward.is_set == 0x01 {
+        if self.runtime_.motion_forward.is_set != 0 {
             let r_size = self.runtime_.motion_forward.r_size;
             self.runtime_.motion_forward.h = self.decode_motion_vector(r_size, self.runtime_.motion_forward.h);
             self.runtime_.motion_forward.v = self.decode_motion_vector(r_size, self.runtime_.motion_forward.v);
@@ -710,14 +715,7 @@ impl Mpeg1Video {
 
             // Save premultiplied coefficient
             self.block_data_[de_zig_zagged as usize] = level * MP1V_PREMULTIPLIER_MATRIX[de_zig_zagged as usize] as i32;
-
         }
-
-        println!("###############");
-        for i in 0..64 {
-            print!("{} ", self.block_data_[i]);
-        }
-        println!("");
 
         // Move block to its place
         let d: usize;
