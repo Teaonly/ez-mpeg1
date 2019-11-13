@@ -152,8 +152,8 @@ impl Mpeg1Video {
     const PICTURE_TYPE_I: u32 = 0x01;
     const PICTURE_TYPE_P: u32 = 0x02;
 
-    const MAX_PICTURE_WIDTH: usize = 1920;
-    const MAX_PICTURE_HEIGHT: usize = 1080;
+    const MAX_PICTURE_WIDTH: usize = 2048;
+    const MAX_PICTURE_HEIGHT: usize = 2048;
 
     const DCT_SIZE_TABLE: [&'static [(i16, i16)];3]  = [&vlc::MP1V_DCT_SIZE_LUMINANCE,
                                                 &vlc::MP1V_DCT_SIZE_CHROMINANCE,
@@ -255,11 +255,13 @@ impl Mpeg1Video {
         self.info_.luma_height = self.info_.mb_height << 4;
         self.info_.chroma_width = self.info_.mb_width << 3;
         self.info_.chroma_height = self.info_.mb_height << 3;
-        self.info_._parsed_ = true;
+        self.info_.mb_size = self.info_.mb_width *  self.info_.mb_height;
 
         self.init_frames();
         self.runtime_.frame_current = 0;
         self.runtime_.frame_forward = 0;
+
+        self.info_._parsed_ = true;
     }
 
     fn init_frames(&mut self) {
@@ -368,6 +370,8 @@ impl Mpeg1Video {
             self.buffer_.read(8);
         }
 
+        println!(">>>>>>>>>>>>>>>{}", slice_code);
+
         let mut slice_begin = true;
         loop {
             self.decode_macroblock(slice_begin);
@@ -401,6 +405,7 @@ impl Mpeg1Video {
             self.runtime_.macroblock_address += increment as i32;
         } else {
             if self.runtime_.macroblock_address + increment as i32 >= self.info_.mb_size as i32 {
+                panic!(" macroblock increment error !");
                 return; // invalid
             }
 
@@ -434,6 +439,7 @@ impl Mpeg1Video {
 
         if self.runtime_.mb_col >= self.info_.mb_width
            || self.runtime_.mb_row >= self.info_.mb_height {
+            panic!(" macroblock address error !");
             return; // corrupt stream;
         }
 
@@ -459,7 +465,6 @@ impl Mpeg1Video {
             // Intra-coded macroblocks reset motion vectors
             self.runtime_.motion_forward.h = 0;
             self.runtime_.motion_forward.v = 0;
-
         } else {
             // Non-intra macroblocks reset DC predictors
             self.runtime_.dc_predictor[0] = 128;
@@ -467,7 +472,7 @@ impl Mpeg1Video {
             self.runtime_.dc_predictor[2] = 128;
 
             self.decode_motion_vectors();
-            self.predict_macroblock();
+            //self.predict_macroblock();
         }
 
         // Decode blocks
@@ -661,7 +666,7 @@ impl Mpeg1Video {
             }
 
             if coeff == 0xffff {
-                // escape
+                // escape, table B.5f
                 run = self.buffer_.read(6) as i32;
                 level = self.buffer_.read(8) as i32;
                 if level == 0 {
@@ -681,6 +686,7 @@ impl Mpeg1Video {
 
             n += run;
             if n < 0 || n >= 64 {
+                panic!("Can't do run/level for DCT");
                 return; // invalid
             }
 
@@ -704,7 +710,14 @@ impl Mpeg1Video {
 
             // Save premultiplied coefficient
             self.block_data_[de_zig_zagged as usize] = level * MP1V_PREMULTIPLIER_MATRIX[de_zig_zagged as usize] as i32;
+
         }
+
+        println!("###############");
+        for i in 0..64 {
+            print!("{} ", self.block_data_[i]);
+        }
+        println!("");
 
         // Move block to its place
         let d: usize;
@@ -748,6 +761,7 @@ impl Mpeg1Video {
         if self.runtime_.macroblock_intra != 0 {
             // Overwrite (no prediction)
             if n == 1 {
+                /*
                 let clamped  = plm_clamp((self.block_data_[0] + 128) >> 8);
                 {
                     for _y in 0..8 {
@@ -758,9 +772,11 @@ impl Mpeg1Video {
                         di += dw - 8;
                     }
                 }
+                */
                 self.block_data_[0] = 0;
             }
             else {
+                /*
                 self.idct();
                 let mut si:usize = 0;
                 {
@@ -773,12 +789,14 @@ impl Mpeg1Video {
                         di += dw - 8;
                     }
                 }
+                */
                 zero_block(&mut self.block_data_);
             }
         }
         else {
             // Add data to the predicted macroblock
             if n == 1 {
+                /*
                 let value = (self.block_data_[0] + 128) >> 8;
                 {
                     for _y in 0..8 {
@@ -789,9 +807,11 @@ impl Mpeg1Video {
                         di += dw - 8;
                     }
                 }
+                */
                 self.block_data_[0] = 0;
             }
             else {
+                /*
                 self.idct();
                 let mut si:usize = 0;
                 for _y in 0..8 {
@@ -802,6 +822,7 @@ impl Mpeg1Video {
                     }
                     di += dw - 8;
                 }
+                */
                 zero_block(&mut self.block_data_);
             }
         }
@@ -888,7 +909,6 @@ impl Mpeg1Video {
             block[6 + i] = (y3 - x4 + 128) >> 8;
             block[7 + i] = (y4 - b7 + 128) >> 8;
         }
-
     }
 }
 

@@ -128,7 +128,7 @@ impl RingBitBuffer {
     pub fn next_is_start(&mut self) -> bool {
         let oldbi = self.rbi_;
 
-        self.rbi_ = (self.rbi_ + 7) >> 3;
+        self.rbi_ = ((self.rbi_ + 7) >> 3) << 3;
         let ret = self.read(24) == 0x000001;
         self.rbi_ = oldbi;
 
