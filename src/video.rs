@@ -199,10 +199,12 @@ impl Mpeg1Video {
         }
         if self.info_._parsed_ == false {
             if self.buffer_.find_start_code(Mpeg1Video::SEQUENCE_START_CODE) == false {
+                println!("Can't find SEQ start code");
                 return DecodeResult::InternalError;
             }
             self.decode_sequence_header();
             if self.info_._parsed_ == false {
+                println!("Parsing sequence header error!");
                 return DecodeResult::InternalError;
             }
         }
@@ -293,6 +295,7 @@ impl Mpeg1Video {
 
     fn decode_picture(&mut self) -> DecodeResult {
         if self.buffer_.find_start_code(Mpeg1Video::PICTURE_START_CODE) == false {
+            println!("Can't find PICTURE_START_CODE");
             return DecodeResult::InternalError;
         }
 
@@ -303,6 +306,7 @@ impl Mpeg1Video {
 
         if self.runtime_.picture_type != Mpeg1Video::PICTURE_TYPE_I &&
             self.runtime_.picture_type != Mpeg1Video::PICTURE_TYPE_P {
+            println!("Can't support B or D Picture Type ");
             return DecodeResult::InternalError;
         }
 
@@ -312,15 +316,16 @@ impl Mpeg1Video {
 
             let f_code: i32 = self.buffer_.read(3) as i32;
             if f_code == 0x00 {
+                println!("f_code can't be 0x00");
                 return DecodeResult::InternalError;
             }
-
             self.runtime_.motion_forward.r_size = f_code - 1;
         }
 
         loop {
             // skip user data and extension
             if self.buffer_.find_start() == false {
+                println!("Can't find slice start code");
                 return DecodeResult::InternalError;
             }
             let code = self.buffer_.read(8);
@@ -330,17 +335,21 @@ impl Mpeg1Video {
             if code == Mpeg1Video::SLICE_START {
                 break;
             }
+            println!("Can't find first slice start code");
             return DecodeResult::InternalError;
         }
 
         let mut next_code = Mpeg1Video::SLICE_START;
         while next_code >= Mpeg1Video::SLICE_START && next_code <= Mpeg1Video::SLICE_LAST {
-            self.decode_slice(next_code);
-
+            if let Some(msg) = self.decode_slice(next_code) {
+                println!("{}", msg);
+                return DecodeResult::InternalError;
+            }
             if self.buffer_.find_start() == true {
                 next_code = self.buffer_.read(8);
             } else {
-                panic!("#### EXIT FOR DEBUG ###");
+                println!("Can't find start after slice!");
+                return DecodeResult::InternalError;
             }
         }
 
@@ -348,11 +357,10 @@ impl Mpeg1Video {
 
         self.runtime_.frame_forward = self.runtime_.frame_current;
         self.runtime_.frame_current = 1 - self.runtime_.frame_current;
-
         return DecodeResult::GotOneFrame;
     }
 
-    fn decode_slice(&mut self, slice_code: u32) {
+    fn decode_slice(&mut self, slice_code: u32) -> Option<String> {
         self.runtime_.macroblock_address = ((slice_code - 1) * self.info_.mb_width) as i32 - 1;
 
         // Reset motion vectors and DC predictors
@@ -380,6 +388,8 @@ impl Mpeg1Video {
                 break;
             }
         }
+
+        None
     }
 
     fn decode_macroblock(&mut self, slice_begin:bool) {
@@ -433,8 +443,6 @@ impl Mpeg1Video {
             self.runtime_.macroblock_address += 1;
         }
 
-
-
         self.runtime_.mb_row = self.runtime_.macroblock_address as u32 / self.info_.mb_width;
         self.runtime_.mb_col = self.runtime_.macroblock_address as u32 % self.info_.mb_width;
 
@@ -457,9 +465,6 @@ impl Mpeg1Video {
         self.runtime_.macroblock_pattern = self.runtime_.macroblock_type & 0x02;
         self.runtime_.motion_forward.is_set = self.runtime_.macroblock_type & 0x08;
 
-
-
-
         // Quantizer scale
         if (self.runtime_.macroblock_type & 0x10) != 0 {
             self.runtime_.quantizer_scale = self.buffer_.read(5);
@@ -476,7 +481,7 @@ impl Mpeg1Video {
             self.runtime_.dc_predictor[2] = 128;
 
             self.decode_motion_vectors();
-            //self.predict_macroblock();
+            self.predict_macroblock();
         }
 
         // Decode blocks
@@ -490,7 +495,6 @@ impl Mpeg1Video {
                     0x00
                 }
             };
-
 
         let mut mask:u32 = 0x20;
         for block in 0..6 {

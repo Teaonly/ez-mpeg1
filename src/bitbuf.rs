@@ -126,9 +126,15 @@ impl RingBitBuffer {
     }
 
     pub fn next_is_start(&mut self) -> bool {
+        if !self.has(40) {
+            return false;
+        }
+
         let oldbi = self.rbi_;
 
         self.rbi_ = ((self.rbi_ + 7) >> 3) << 3;
+        self.rbi_ = self.rbi_ % (self.cap_ * 8);
+
         let ret = self.read(24) == 0x000001;
         self.rbi_ = oldbi;
 
@@ -191,8 +197,6 @@ impl RingBitBuffer {
 
         return false;
     }
-
-
 }
 
 pub struct BitBuffer<'a> {
