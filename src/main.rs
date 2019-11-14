@@ -29,7 +29,17 @@ fn main() {
                 if vcodec.push(payload).is_none() {
                     panic!("Decoder's buffer is full,can't do any decoding");
                 }
-                vcodec.decode();
+                match vcodec.decode() {
+                    video::DecodeResult::GotOneFrame =>{
+                        println!("One frame is OK");
+                    },
+                    video::DecodeResult::InternalError =>{
+                        panic!("Internal error happen");
+                    },
+                    video::DecodeResult::NeedMoreData =>{
+
+                    }
+                };
             }
         }
 

@@ -380,9 +380,12 @@ impl Mpeg1Video {
 
         let mut slice_begin = true;
         loop {
-            self.decode_macroblock(slice_begin);
-            slice_begin = false;
+            let ret = self.decode_macroblock(slice_begin);
+            if let Some(msg) = ret {
+                return Some(msg);
+            }
 
+            slice_begin = false;
             if  (self.runtime_.macroblock_address >= self.info_.mb_size as i32 - 1)
                 || self.buffer_.next_is_start() {
                 break;
@@ -392,7 +395,7 @@ impl Mpeg1Video {
         None
     }
 
-    fn decode_macroblock(&mut self, slice_begin:bool) {
+    fn decode_macroblock(&mut self, slice_begin:bool) -> Option<String> {
         // Decode self->macroblock_address_increment
         let mut increment:i32 = 0;
 
@@ -414,8 +417,7 @@ impl Mpeg1Video {
             self.runtime_.macroblock_address += increment as i32;
         } else {
             if self.runtime_.macroblock_address + increment as i32 >= self.info_.mb_size as i32 {
-                panic!(" macroblock increment error !");
-                return; // invalid
+                return Some(" macroblock increment error !".to_string()); // invalid
             }
 
             if increment > 1 {
@@ -448,8 +450,7 @@ impl Mpeg1Video {
 
         if self.runtime_.mb_col >= self.info_.mb_width
            || self.runtime_.mb_row >= self.info_.mb_height {
-            panic!(" macroblock address error !");
-            return; // corrupt stream;
+            return Some(" macroblock address error !".to_string()); // corrupt stream;
         }
 
         // Process the current macroblock
@@ -458,7 +459,7 @@ impl Mpeg1Video {
         } else if self.runtime_.picture_type == Mpeg1Video::PICTURE_TYPE_P {
             self.runtime_.macroblock_type = self.buffer_.read_vlc(&vlc::MP1V_MACROBLOCK_TYPE_PREDICTIVE) as i32;
         } else {
-            panic!("Dont' support B/D picture type");
+            return Some("Dont' support B/D picture type".to_string());
         }
 
         self.runtime_.macroblock_intra = self.runtime_.macroblock_type & 0x01;
@@ -503,6 +504,8 @@ impl Mpeg1Video {
             }
             mask >>= 1;
         }
+
+        None
     }
 
     fn predict_macroblock(&mut self) {
@@ -547,8 +550,7 @@ impl Mpeg1Video {
         let max_address = dw * (self.info_.mb_height * block_size - block_size + 1) - block_size;
         let max_address = max_address as usize;
         if si > max_address || di > max_address {
-            panic!("motion vector outof picture");
-            return; // corrupt video
+            panic!("motion vector outof picture");  // corrupt video
         }
 
         let dest_scan = (dw - block_size) as usize;
@@ -695,8 +697,7 @@ impl Mpeg1Video {
 
             n += run;
             if n < 0 || n >= 64 {
-                panic!("Can't do run/level for DCT");
-                return; // invalid
+                panic!("Can't do run/level for DCT");   // invalid
             }
 
             let de_zig_zagged = MP1V_ZIG_ZAG[n as usize];
