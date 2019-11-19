@@ -372,10 +372,14 @@ impl MpegPS {
     }
 
     fn pid2pes(&mut self, ts:(u32, u32, u32, u32, usize)) -> bool {
-        if ts.0 == 0x01 && ts.3 == 0x000001E0 && self.ts_pid_ == -1 {
-            self.ts_pid_ = ts.1 as i32;
-            return true;
-        } if self.ts_pid_ == -1 {
+        if ts.0 == 0x01 && self.ts_pid_ == -1 {
+            if ts.3 >= 0x000001E0 && ts.3 <= 0x000001EF {
+                self.ts_pid_ = ts.1 as i32;
+                return true;
+            }
+        }
+
+        if self.ts_pid_ == -1 {
             return false;
         }
 
@@ -446,14 +450,12 @@ impl MpegPS {
             let payload_len = 188 - ret.4;
             if payload_len < self.remind() {
                 if self.pid2pes(ret) {
-                    /*
                     unsafe {
                         let dst: *mut u8 = self.buffer_.as_ptr().add(self.len_) as *mut u8;
                         let src: *const u8 = self.ts_buffer_.as_ptr().add(ret.4);
                         ptr::copy(src, dst, payload_len);
                     }
                     self.len_ = self.len_ + payload_len;
-                    */
                 }
             } else {
                 return 0;
@@ -467,7 +469,7 @@ impl MpegPS {
             let payload_len = 188 - ret.4;
             if payload_len < self.remind() {
                 if self.pid2pes(ret) {
-                    //self.push( &data[ret.4 + offset .. offset+188] );
+                    self.push( &data[ret.4 + offset .. offset+188] );
                 }
                 offset += 188;
             } else {

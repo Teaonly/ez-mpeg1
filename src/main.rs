@@ -25,7 +25,6 @@ fn main() {
         if let Ok(ref pkt) = pkt_result {
             println!("===={:?}", pkt);
             if pkt.pes_type == pkt::PacketType::PES_VIDEO {
-                /*
                 let payload = ps.payload(pkt);
                 if vcodec.push(payload).is_none() {
                     panic!("Decoder's buffer is full,can't do any decoding");
@@ -41,7 +40,6 @@ fn main() {
 
                     }
                 };
-                */
             }
         }
 
