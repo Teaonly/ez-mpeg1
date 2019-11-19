@@ -23,6 +23,17 @@ pub enum PacketType {
     PES_UNKNOW,
 }
 
+#[derive(Debug)]
+pub struct PESPacketInfo {
+    pub pes_type: PacketType,
+    pub code: u8,
+    pub pts: u64,
+
+    pub offset: usize,
+    pub len: usize,
+    pub payload: usize,
+}
+
 pub struct MpegPS {
     pub system_clock_ref: u64,
     pub bit_rate:         u64,
@@ -35,17 +46,10 @@ pub struct MpegPS {
     buffer_: Vec<u8>,
     offset_: usize,
     len_: usize,
-}
 
-#[derive(Debug)]
-pub struct PESPacketInfo {
-    pub pes_type: PacketType,
-    pub code: u8,
-    pub pts: u64,
-
-    pub offset: usize,
-    pub len: usize,
-    pub payload: usize,
+    ts_buffer_:     [u8; 188],
+    ts_offset_:     usize,
+    ts_pid_:        i32,
 }
 
 impl MpegPS {
@@ -69,10 +73,13 @@ impl MpegPS {
             return PacketType::PES_VIDEO;
         }
 
-        if code == MpegPS::PES_PADDING_CODE ||
+        if code == MpegPS::PACK_HEADER_CODE ||
+           code == MpegPS::SYSTEM_HEADER_CODE ||
+           code == MpegPS::PES_PADDING_CODE ||
            code == MpegPS::PES_PRIVATE_CODE {
             return PacketType::PES_SKIP;
         }
+
         return PacketType::PES_UNKNOW;
     }
 
@@ -104,6 +111,10 @@ impl MpegPS {
             buffer_:    buffer,
             offset_:    0,
             len_:       0,
+
+            ts_buffer_: [0;188],
+            ts_offset_: 0,
+            ts_pid_:    -1,
         }
     }
 
@@ -343,17 +354,138 @@ impl MpegPS {
     }
 
     fn find_start_code(data:&[u8]) -> Option<(usize, u8)> {
-        if data.len() < 3 {
+        if data.len() < 4 {
             return None
         }
 
         for pos in 0..data.len() - 3 {
             if data[pos] == 0x00
                && data[pos+1] == 0x00
-               && data[pos+2] == 0x01{
-                return Some( (pos, data[pos+3]));
+               && data[pos+2] == 0x01 {
+                let code = data[pos+3];
+                if MpegPS::code2type(code) != PacketType::PES_UNKNOW {
+                    return Some( (pos, code));
+                }
             }
         }
         None
     }
+
+    fn pid2pes(&mut self, ts:(u32, u32, u32, u32, usize)) -> bool {
+        if ts.0 == 0x01 && ts.3 == 0x000001E0 && self.ts_pid_ == -1 {
+            self.ts_pid_ = ts.1 as i32;
+            return true;
+        } if self.ts_pid_ == -1 {
+            return false;
+        }
+
+        if ts.1 as i32 == self.ts_pid_ {
+            return true;
+        }
+
+        return false;
+    }
+
+    // added implementation for MPEG-TS support
+    fn remind(&self) -> usize {
+        self.buffer_.len() - self.len_
+    }
+
+    fn parse_ts(data: &[u8]) -> (u32, u32, u32, u32, usize) {
+        // check ts packet itself
+        let mut buffer = bitbuf::BitBuffer::new(data);
+        if buffer.read(8).unwrap() != 0x47 {
+            panic!("Can't find 0x47 in TS package");
+        }
+
+        let _tei = buffer.read(1);
+        let payload_start = buffer.read(1).unwrap();
+        let _transport_priority = buffer.read(1);
+        let pid = buffer.read(13).unwrap();
+        let _tsc = buffer.read(2);
+        let adaptation_field_control = buffer.read(2).unwrap();
+        let continuity_counter = buffer.read(4).unwrap();
+
+        if adaptation_field_control == 0x00 {
+            panic!("Can't support adaptation_field_control = 0x00");
+        }
+        if (adaptation_field_control & 0x02) != 0 {
+            let filed_length = buffer.read(8).unwrap();
+            buffer.skip( (filed_length << 3) as usize);
+        }
+        let code:u32 = if buffer.has(32) {
+            let ret = buffer.read(32).unwrap();
+            buffer.back(32);
+            ret
+        } else {
+            0xFFFFFFFF
+        };
+
+        return (payload_start, pid, continuity_counter, code, buffer.pos() / 8);
+    }
+
+    pub fn push_ts(&mut self, data: &[u8]) -> usize {
+        if data.len() < 188 {
+            return 0;
+        }
+
+        let mut offset:usize = 0;
+
+        if self.ts_offset_ > 0 {
+            offset = 188 - self.ts_offset_;
+            unsafe {
+                let dst: *mut u8 = self.ts_buffer_.as_ptr().add( self.ts_offset_ ) as *mut u8;
+                let src: *const u8 = data.as_ptr();
+                ptr::copy(src, dst, offset);
+            }
+            self.ts_offset_ = 0;
+
+            let ret = MpegPS::parse_ts(&self.ts_buffer_);
+            println!("============{:?}", ret);
+
+            let payload_len = 188 - ret.4;
+            if payload_len < self.remind() {
+                if self.pid2pes(ret) {
+                    /*
+                    unsafe {
+                        let dst: *mut u8 = self.buffer_.as_ptr().add(self.len_) as *mut u8;
+                        let src: *const u8 = self.ts_buffer_.as_ptr().add(ret.4);
+                        ptr::copy(src, dst, payload_len);
+                    }
+                    self.len_ = self.len_ + payload_len;
+                    */
+                }
+            } else {
+                return 0;
+            }
+        }
+
+        while data.len() >= 188 + offset {
+            let ret = MpegPS::parse_ts(&data[offset..offset+188]);
+            println!("============{:?}", ret);
+
+            let payload_len = 188 - ret.4;
+            if payload_len < self.remind() {
+                if self.pid2pes(ret) {
+                    //self.push( &data[ret.4 + offset .. offset+188] );
+                }
+                offset += 188;
+            } else {
+                return offset;
+            }
+        }
+
+        if offset < data.len() {
+            unsafe {
+                let dst: *mut u8 = self.ts_buffer_.as_ptr() as *mut u8;
+                let src: *const u8 = data.as_ptr().add(offset);
+                ptr::copy(src, dst, data.len() - offset);
+            }
+            self.ts_offset_ = data.len() - offset;
+        }
+
+        return  data.len();
+    }
+
 }
+

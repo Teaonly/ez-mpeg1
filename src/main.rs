@@ -18,13 +18,14 @@ fn main() {
 
     let mut index:usize = 1400;
     let mut ps = pkt::MpegPS::new();
-    ps.push(&data[0..index]);
+    ps.push_ts(&data[0..index]);
 
     while index < data.len() {
         let pkt_result = ps.get();
         if let Ok(ref pkt) = pkt_result {
             println!("===={:?}", pkt);
             if pkt.pes_type == pkt::PacketType::PES_VIDEO {
+                /*
                 let payload = ps.payload(pkt);
                 if vcodec.push(payload).is_none() {
                     panic!("Decoder's buffer is full,can't do any decoding");
@@ -40,6 +41,7 @@ fn main() {
 
                     }
                 };
+                */
             }
         }
 
@@ -49,13 +51,13 @@ fn main() {
                 if pushed > data.len() - index {
                     pushed = data.len() - index;
                 }
-                index = index + ps.push(&data[index..(index+pushed)]);
+                index = index + ps.push_ts(&data[index..(index+pushed)]);
             } else if let pkt::PacketError::NO_START_CODE = e {
                 let mut pushed = 1280;
                 if pushed > data.len() - index {
                     pushed = data.len() - index;
                 }
-                index = index + ps.push(&data[index..(index+pushed)]);
+                index = index + ps.push_ts(&data[index..(index+pushed)]);
             } else {
                 println!("Can't handle Error: {:?}", e);
                 break;

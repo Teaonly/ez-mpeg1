@@ -230,6 +230,11 @@ impl<'a> BitBuffer<'a> {
         }
         0
     }
+    pub fn back(&mut self, count: usize) {
+        if self._bi >= count {
+            self._bi = self._bi - count;
+        }
+    }
     pub fn read(&mut self, mut count: usize) -> Option<u32> {
         if !self.has(count) {
             return None;
